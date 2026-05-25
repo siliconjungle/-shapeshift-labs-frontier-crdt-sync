@@ -193,11 +193,6 @@ export interface CrdtStorageEvent {
 
 export type CrdtStorageEventListener = (event: CrdtStorageEvent) => void;
 
-export interface CrdtMemoryStorageAdapterOptions {
-  /** Validate update bytes before committing them to the memory log. Disabled by default for the fastest test adapter path. */
-  validateUpdates?: boolean;
-}
-
 export interface CrdtStorageCompactionOptions {
   
   includeMetadata?: boolean;
@@ -311,36 +306,6 @@ export interface CrdtSyncModelChecker extends CrdtLocalSyncNetwork {
   snapshot(): CrdtSyncModelSnapshot;
   history(): CrdtSyncModelEvent[];
   clearHistory(): void;
-}
-
-export type CrdtSyncModelScheduleAction =
-  | { type: 'connect'; peerId: string }
-  | { type: 'disconnect'; peerId: string }
-  | { type: 'partition'; left: string | readonly string[]; right: string | readonly string[] }
-  | { type: 'heal'; left?: string | readonly string[]; right?: string | readonly string[] }
-  | { type: 'duplicate-next'; count?: number }
-  | { type: 'drop-next'; count?: number }
-  | { type: 'deliver'; messageId: number }
-  | { type: 'deliver-next' }
-  | { type: 'drain'; maxSteps?: number };
-
-export interface CrdtSyncModelReplayHooks {
-  connect?(peerId: string): CrdtSyncMessageReceiver | undefined | Promise<CrdtSyncMessageReceiver | undefined>;
-  beforeAction?(action: CrdtSyncModelScheduleAction, index: number, checker: CrdtSyncModelChecker): void | Promise<void>;
-  afterAction?(action: CrdtSyncModelScheduleAction, index: number, checker: CrdtSyncModelChecker): void | Promise<void>;
-}
-
-export interface CrdtSyncModelReplayResult extends CrdtSyncModelCheckResult {
-  actionCount: number;
-  snapshot: CrdtSyncModelSnapshot;
-}
-
-export type CrdtSyncModelFailurePredicate = (
-  schedule: readonly CrdtSyncModelScheduleAction[]
-) => boolean | Promise<boolean>;
-
-export interface CrdtSyncModelMinimizeOptions {
-  maxPasses?: number;
 }
 
 export interface CrdtSyncConvergencePeer {

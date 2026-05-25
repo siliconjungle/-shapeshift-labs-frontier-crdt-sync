@@ -7,12 +7,15 @@ import {
 import type {
   CrdtSnapshot,
   CrdtStateVector,
-  CrdtMemoryStorageAdapterOptions,
   CrdtStorageAdapter,
   CrdtStorageEvent,
   CrdtStorageEventListener,
   CrdtUpdateInput
 } from './types.js';
+
+export interface CrdtMemoryStorageAdapterOptions {
+  validateUpdates?: boolean;
+}
 
 export function createCrdtMemoryStorageAdapter(options?: CrdtMemoryStorageAdapterOptions): CrdtStorageAdapter {
   return new FrontierCrdtMemoryStorageAdapter(options);

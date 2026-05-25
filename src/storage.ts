@@ -9,6 +9,9 @@ export type {
   CrdtStorageCompactionResult,
   CrdtStorageEvent,
   CrdtStorageEventListener,
-  CrdtStorageEventType,
-  CrdtMemoryStorageAdapterOptions
+  CrdtStorageEventType
 } from './types.js';
+
+export type {
+  CrdtMemoryStorageAdapterOptions
+} from './crdt-sync-memory-storage.js';

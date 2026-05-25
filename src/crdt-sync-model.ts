@@ -13,21 +13,46 @@ import type {
   CrdtSyncConvergenceResult,
   CrdtSyncConvergenceTarget,
   CrdtSyncMessageReceiver,
-  CrdtSyncModelFailurePredicate,
   CrdtSyncModelChecker,
   CrdtSyncModelCheckResult,
   CrdtSyncModelDrainOptions,
   CrdtSyncModelEvent,
-  CrdtSyncModelMinimizeOptions,
-  CrdtSyncModelReplayHooks,
-  CrdtSyncModelReplayResult,
-  CrdtSyncModelScheduleAction,
   CrdtSyncModelSnapshot,
   CrdtSyncQueuedMessage,
   CrdtSyncTransport,
   CrdtSyncTransportPayload,
   JsonValue
 } from './types.js';
+
+export type CrdtSyncModelScheduleAction =
+  | { type: 'connect'; peerId: string }
+  | { type: 'disconnect'; peerId: string }
+  | { type: 'partition'; left: string | readonly string[]; right: string | readonly string[] }
+  | { type: 'heal'; left?: string | readonly string[]; right?: string | readonly string[] }
+  | { type: 'duplicate-next'; count?: number }
+  | { type: 'drop-next'; count?: number }
+  | { type: 'deliver'; messageId: number }
+  | { type: 'deliver-next' }
+  | { type: 'drain'; maxSteps?: number };
+
+export interface CrdtSyncModelReplayHooks {
+  connect?(peerId: string): CrdtSyncMessageReceiver | undefined | Promise<CrdtSyncMessageReceiver | undefined>;
+  beforeAction?(action: CrdtSyncModelScheduleAction, index: number, checker: CrdtSyncModelChecker): void | Promise<void>;
+  afterAction?(action: CrdtSyncModelScheduleAction, index: number, checker: CrdtSyncModelChecker): void | Promise<void>;
+}
+
+export interface CrdtSyncModelReplayResult extends CrdtSyncModelCheckResult {
+  actionCount: number;
+  snapshot: CrdtSyncModelSnapshot;
+}
+
+export type CrdtSyncModelFailurePredicate = (
+  schedule: readonly CrdtSyncModelScheduleAction[]
+) => boolean | Promise<boolean>;
+
+export interface CrdtSyncModelMinimizeOptions {
+  maxPasses?: number;
+}
 
 interface ModelQueuedMessage {
   id: number;

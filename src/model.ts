@@ -15,11 +15,14 @@ export type {
   CrdtSyncModelDrainOptions,
   CrdtSyncModelEvent,
   CrdtSyncModelEventType,
+  CrdtSyncModelSnapshot,
+  CrdtSyncQueuedMessage
+} from './types.js';
+
+export type {
   CrdtSyncModelFailurePredicate,
   CrdtSyncModelMinimizeOptions,
   CrdtSyncModelReplayHooks,
   CrdtSyncModelReplayResult,
-  CrdtSyncModelScheduleAction,
-  CrdtSyncModelSnapshot,
-  CrdtSyncQueuedMessage
-} from './types.js';
+  CrdtSyncModelScheduleAction
+} from './crdt-sync-model.js';
