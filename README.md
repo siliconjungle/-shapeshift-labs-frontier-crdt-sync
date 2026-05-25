@@ -79,8 +79,6 @@ import {
   createCrdtLocalSyncNetwork,
   createCrdtSyncModelChecker,
   checkCrdtSyncConvergence,
-  replayCrdtSyncModelSchedule,
-  minimizeCrdtSyncModelSchedule,
   createCrdtTextBinding,
   encodeCrdtSyncMessage,
   decodeCrdtSyncMessage
@@ -188,10 +186,10 @@ Latest local package benchmark on Node v26.1.0, darwin arm64, 7 rounds:
 
 | Fixture | Median | p95 |
 | --- | ---: | ---: |
-| Sync open/update/ack exchange | 11.83 us | 19.64 us |
-| Sync message encode/decode | 3.72 us | 7.38 us |
-| Model queue duplicate/drop | 1.32 us | 3.73 us |
-| Memory storage update append | 2.45 us | 7.81 us |
+| Sync open/update/ack exchange | 11.85 us | 16.92 us |
+| Sync message encode/decode | 3.42 us | 6.55 us |
+| Model queue duplicate/drop | 1.31 us | 6.23 us |
+| Memory storage update append | 2.91 us | 7.85 us |
 
 These are Frontier-only package measurements, not competitor comparisons.
 

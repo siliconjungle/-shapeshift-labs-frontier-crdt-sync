@@ -9,10 +9,12 @@ import {
   createCrdtSyncEndpoint,
   createCrdtSyncModelChecker,
   decodeCrdtSyncMessage,
-  encodeCrdtSyncMessage,
+  encodeCrdtSyncMessage
+} from '../dist/index.js';
+import {
   minimizeCrdtSyncModelSchedule,
   replayCrdtSyncModelSchedule
-} from '../dist/index.js';
+} from '../dist/model.js';
 
 const args = parseArgs(process.argv.slice(2));
 const soakCases = readPositiveInt(args.soakCases, 24);

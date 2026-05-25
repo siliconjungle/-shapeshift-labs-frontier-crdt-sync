@@ -18,8 +18,6 @@ for (const name of [
   'createCrdtLocalSyncNetwork',
   'createCrdtSyncModelChecker',
   'checkCrdtSyncConvergence',
-  'replayCrdtSyncModelSchedule',
-  'minimizeCrdtSyncModelSchedule',
   'createCrdtTextBinding',
   'createCrdtDocumentUrl',
   'parseCrdtDocumentUrl',
