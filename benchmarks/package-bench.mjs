@@ -56,14 +56,17 @@ import {
   createCrdtSyncEndpoint,
   decodeCrdtSyncMessage,
   encodeCrdtSyncMessage,
-  createCrdtMemoryStorageAdapter
+  createCrdtMemoryStorageAdapter,
+  createCrdtSyncModelChecker
 } from '../dist/index.js';
 
 const rows = [
   runRow('Sync open/update/ack exchange', 500, () => { const result = syncOnce(); sink += result; }),
   runRow('Sync message encode/decode', 3000, () => { const message = makeMessage(); sink += decodeCrdtSyncMessage(encodeCrdtSyncMessage(message)).stateVector?.['sync-a'] || 0; }),
+  runRow('Model queue duplicate/drop', 1000, () => { sink += modelQueueOnce(); }),
   runRow('Memory storage update append', 1000, () => { const storage = createCrdtMemoryStorageAdapter(); const doc = createCrdtDocument({ actorId: 'storage-a' }); doc.set('/title', 'hello'); storage.appendUpdate('doc', doc.exportUpdate()); sink++; })
 ];
 finish('@shapeshift-labs/frontier-crdt-sync', rows);
 function syncOnce() { const alice = createCrdtDocument({ actorId: 'sync-a' }); const bob = createCrdtDocument({ actorId: 'sync-b' }); alice.set('/title', 'hello'); const a = createCrdtSyncEndpoint(alice, { documentId: 'doc', senderId: 'alice' }); const b = createCrdtSyncEndpoint(bob, { documentId: 'doc', senderId: 'bob' }); const update = a.receive('bob', b.open('alice')); if (update) b.receive('alice', update); return bob.toJSON().title.length; }
 function makeMessage() { const doc = createCrdtDocument({ actorId: 'sync-a' }); doc.set('/title', 'hello'); const endpoint = createCrdtSyncEndpoint(doc, { documentId: 'doc', senderId: 'alice' }); return endpoint.open('bob'); }
+function modelQueueOnce() { const checker = createCrdtSyncModelChecker(); const a = checker.connect('a'); checker.connect('b', () => {}); a.send('b', { type: 'ack', senderId: 'a', documentId: 'doc', stateVector: {} }); checker.duplicateNext(); checker.dropNext(); return checker.snapshot().dropped + checker.snapshot().duplicated; }

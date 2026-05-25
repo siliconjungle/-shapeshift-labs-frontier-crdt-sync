@@ -13,10 +13,15 @@ import type {
   CrdtSyncConvergenceResult,
   CrdtSyncConvergenceTarget,
   CrdtSyncMessageReceiver,
+  CrdtSyncModelFailurePredicate,
   CrdtSyncModelChecker,
   CrdtSyncModelCheckResult,
   CrdtSyncModelDrainOptions,
   CrdtSyncModelEvent,
+  CrdtSyncModelMinimizeOptions,
+  CrdtSyncModelReplayHooks,
+  CrdtSyncModelReplayResult,
+  CrdtSyncModelScheduleAction,
   CrdtSyncModelSnapshot,
   CrdtSyncQueuedMessage,
   CrdtSyncTransport,
@@ -33,6 +38,51 @@ interface ModelQueuedMessage {
 
 export function createCrdtSyncModelChecker(): CrdtSyncModelChecker {
   return new FrontierCrdtSyncModelChecker();
+}
+
+export async function replayCrdtSyncModelSchedule(
+  checker: CrdtSyncModelChecker,
+  schedule: readonly CrdtSyncModelScheduleAction[],
+  hooks?: CrdtSyncModelReplayHooks
+): Promise<CrdtSyncModelReplayResult> {
+  for (let i = 0; i < schedule.length; i++) {
+    const action = schedule[i];
+    if (hooks?.beforeAction !== undefined) await hooks.beforeAction(action, i, checker);
+    await applyScheduleAction(checker, action, hooks);
+    if (hooks?.afterAction !== undefined) await hooks.afterAction(action, i, checker);
+  }
+  const result = await checker.drain({ maxSteps: 0 });
+  return {
+    ...result,
+    actionCount: schedule.length,
+    snapshot: checker.snapshot()
+  };
+}
+
+export async function minimizeCrdtSyncModelSchedule(
+  schedule: readonly CrdtSyncModelScheduleAction[],
+  predicate: CrdtSyncModelFailurePredicate,
+  options?: CrdtSyncModelMinimizeOptions
+): Promise<CrdtSyncModelScheduleAction[]> {
+  let current = schedule.map(cloneScheduleAction);
+  if (current.length === 0 || !(await predicate(current))) return current;
+  const maxPasses = Math.max(1, Math.floor(options?.maxPasses ?? 16));
+  for (let pass = 0; pass < maxPasses; pass++) {
+    let changed = false;
+    for (let size = Math.max(1, Math.floor(current.length / 2)); size >= 1; size = Math.floor(size / 2)) {
+      for (let start = 0; start <= current.length - size;) {
+        const candidate = current.slice(0, start).concat(current.slice(start + size));
+        if (candidate.length !== current.length && await predicate(candidate)) {
+          current = candidate;
+          changed = true;
+        } else {
+          start++;
+        }
+      }
+    }
+    if (!changed) break;
+  }
+  return current.map(cloneScheduleAction);
 }
 
 export function checkCrdtSyncConvergence(
@@ -228,8 +278,19 @@ class FrontierCrdtSyncModelChecker implements CrdtSyncModelChecker {
     return drops;
   }
 
+  async deliver(messageId: number): Promise<CrdtSyncQueuedMessage | undefined> {
+    if (!Number.isSafeInteger(messageId) || messageId < 1) throw new RangeError('CRDT sync model message id must be a positive safe integer');
+    const index = this.queued.findIndex((message) => message.id === messageId);
+    if (index < 0) return undefined;
+    return this.deliverAt(index);
+  }
+
   async deliverNext(): Promise<CrdtSyncQueuedMessage | undefined> {
-    const queued = this.queued.shift();
+    return this.deliverAt(0);
+  }
+
+  private async deliverAt(index: number): Promise<CrdtSyncQueuedMessage | undefined> {
+    const queued = this.queued.splice(index, 1)[0];
     if (queued === undefined) return undefined;
     const decoded = decodeCrdtSyncMessage(queued.message);
     const receiver = this.receivers.get(queued.toPeerId);
@@ -330,6 +391,57 @@ class FrontierCrdtSyncModelChecker implements CrdtSyncModelChecker {
       ...event
     };
   }
+}
+
+async function applyScheduleAction(
+  checker: CrdtSyncModelChecker,
+  action: CrdtSyncModelScheduleAction,
+  hooks?: CrdtSyncModelReplayHooks
+): Promise<void> {
+  if (action.type === 'connect') {
+    const receiver = hooks?.connect === undefined ? undefined : await hooks.connect(action.peerId);
+    checker.connect(action.peerId, receiver);
+  } else if (action.type === 'disconnect') {
+    checker.disconnect(action.peerId);
+  } else if (action.type === 'partition') {
+    checker.partition(action.left, action.right);
+  } else if (action.type === 'heal') {
+    checker.heal(action.left, action.right);
+  } else if (action.type === 'duplicate-next') {
+    checker.duplicateNext(action.count);
+  } else if (action.type === 'drop-next') {
+    checker.dropNext(action.count);
+  } else if (action.type === 'deliver') {
+    await checker.deliver(action.messageId);
+  } else if (action.type === 'deliver-next') {
+    await checker.deliverNext();
+  } else if (action.type === 'drain') {
+    await checker.drain({ maxSteps: action.maxSteps });
+  } else {
+    const exhaustive: never = action;
+    throw new TypeError('unknown CRDT sync model action: ' + String((exhaustive as { type?: unknown }).type));
+  }
+}
+
+function cloneScheduleAction(action: CrdtSyncModelScheduleAction): CrdtSyncModelScheduleAction {
+  if (action.type === 'partition') {
+    return {
+      type: 'partition',
+      left: clonePeerOrPeers(action.left),
+      right: clonePeerOrPeers(action.right)
+    };
+  }
+  if (action.type === 'heal') {
+    const cloned: CrdtSyncModelScheduleAction = { type: 'heal' };
+    if (action.left !== undefined) cloned.left = clonePeerOrPeers(action.left);
+    if (action.right !== undefined) cloned.right = clonePeerOrPeers(action.right);
+    return cloned;
+  }
+  return { ...action };
+}
+
+function clonePeerOrPeers(value: string | readonly string[]): string | string[] {
+  return typeof value === 'string' ? value : value.slice();
 }
 
 class FrontierCrdtSyncModelTransport implements CrdtSyncTransport {

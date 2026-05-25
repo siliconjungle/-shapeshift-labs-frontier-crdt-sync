@@ -1,6 +1,6 @@
 {
   "name": "@shapeshift-labs/frontier-crdt-sync",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Sync protocol, repo, storage, provider, and binding contracts for Frontier CRDT documents.",
   "type": "module",
   "license": "MIT",
@@ -71,10 +71,11 @@
   },
   "scripts": {
     "build": "node build.mjs",
-    "test": "npm run build && npm run typecheck && node test/smoke.mjs && node test/fuzz.mjs --cases 120",
+    "test": "npm run build && npm run typecheck && node test/smoke.mjs && node test/hardening.mjs && node test/fuzz.mjs --cases 120",
     "prepack": "npm run test",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "fuzz": "npm run build && node test/fuzz.mjs",
+    "fuzz": "npm run build && node test/fuzz.mjs && node test/hardening.mjs --soak-cases 80 --soak-steps 64",
+    "soak": "npm run build && node test/hardening.mjs --soak-cases 160 --soak-steps 96",
     "bench": "npm run build && node benchmarks/package-bench.mjs",
     "pack:dry": "npm pack --dry-run"
   },

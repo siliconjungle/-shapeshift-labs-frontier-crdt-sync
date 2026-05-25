@@ -18,6 +18,8 @@ for (const name of [
   'createCrdtLocalSyncNetwork',
   'createCrdtSyncModelChecker',
   'checkCrdtSyncConvergence',
+  'replayCrdtSyncModelSchedule',
+  'minimizeCrdtSyncModelSchedule',
   'createCrdtTextBinding',
   'createCrdtDocumentUrl',
   'parseCrdtDocumentUrl',
@@ -55,7 +57,9 @@ assert.deepStrictEqual(Object.keys(syncProvider).sort(), [
 ]);
 assert.deepStrictEqual(Object.keys(syncModel).sort(), [
   'checkCrdtSyncConvergence',
-  'createCrdtSyncModelChecker'
+  'createCrdtSyncModelChecker',
+  'minimizeCrdtSyncModelSchedule',
+  'replayCrdtSyncModelSchedule'
 ]);
 assert.deepStrictEqual(Object.keys(syncTextBinding).sort(), [
   'createCrdtTextBinding'

@@ -79,6 +79,8 @@ import {
   createCrdtLocalSyncNetwork,
   createCrdtSyncModelChecker,
   checkCrdtSyncConvergence,
+  replayCrdtSyncModelSchedule,
+  minimizeCrdtSyncModelSchedule,
   createCrdtTextBinding,
   encodeCrdtSyncMessage,
   decodeCrdtSyncMessage
@@ -94,11 +96,56 @@ import { createCrdtSyncEndpoint } from '@shapeshift-labs/frontier-crdt-sync/sync
 import { createCrdtRepo } from '@shapeshift-labs/frontier-crdt-sync/repo';
 import { createCrdtMemoryStorageAdapter } from '@shapeshift-labs/frontier-crdt-sync/storage';
 import { createCrdtSyncProvider } from '@shapeshift-labs/frontier-crdt-sync/provider';
-import { createCrdtSyncModelChecker } from '@shapeshift-labs/frontier-crdt-sync/model';
+import {
+  createCrdtSyncModelChecker,
+  replayCrdtSyncModelSchedule,
+  minimizeCrdtSyncModelSchedule
+} from '@shapeshift-labs/frontier-crdt-sync/model';
 import { createCrdtTextBinding } from '@shapeshift-labs/frontier-crdt-sync/text-binding';
 ```
 
 Each subpath has its own narrow package entry and export surface. The implementation still shares the same sync runtime internally while the module boundaries settle.
+
+## Protocol Spec
+
+The sync protocol is transport-agnostic. A transport carries either decoded message objects or bytes from `encodeCrdtSyncMessage()`.
+
+Encoded messages are JSON envelopes with:
+
+- `magic: "frontier-crdt-sync"`
+- `version: 1`
+- `type: "state-vector" | "update" | "ack"`
+- `stateVector`: the sender's known CRDT state vector
+- optional `documentId`, `senderId`, `actorRanges`, and base64 update bytes
+
+Peer lifecycle:
+
+1. `endpoint.open(peerId)` sends a `state-vector` message.
+2. The receiver replies with `update` when it has missing operations, otherwise `ack`.
+3. An `update` receiver applies the CRDT update idempotently, advances peer knowledge, and replies with its own `update` or `ack`.
+4. An `ack` receiver advances peer knowledge and replies only if it still has changes for that peer.
+5. Reconnects are ordinary `open()` calls; deleting peer state resets the next exchange to an empty known vector.
+
+Idempotence and ordering:
+
+- Duplicate `state-vector`, `update`, and `ack` messages are safe.
+- Updates are CRDT operation updates and may arrive after reordering or reconnection.
+- Messages with the wrong `documentId` are rejected by endpoints.
+- Missing peers, disconnected transports, and model-checker partitions drop messages; reconnect by attaching the peer again and sending a new `open()`.
+
+Capabilities and fallback:
+
+- `actorRangeSync: true` adds `actorRanges` to messages and lets peers request sparse actor ranges.
+- Peers that do not send actor ranges fall back to state-vector behavior.
+- The current wire version is intentionally small. Cross-version wire compatibility is not promised until the sync protocol is declared stable.
+
+Storage contract:
+
+- `appendUpdate()` appends one CRDT update entry. The memory adapter preserves awaited append order, including async object-to-bytes updates.
+- `saveSnapshot()` writes a snapshot independently from the update log.
+- `compact()` atomically replaces the snapshot and update log for a document.
+- `createCrdtMemoryStorageAdapter({ validateUpdates: true })` validates update bytes before commit and rejects corrupted entries without mutating the stored log.
+- Without validation, corrupted entries can still be stored, but replay/load will reject them when the CRDT update decoder reads them.
 
 ## Package Scope
 
@@ -122,9 +169,12 @@ The package ships ESM JavaScript plus `.d.ts` declarations for the root export a
 ```sh
 npm test
 npm run fuzz
+npm run soak
 npm run bench
 npm run pack:dry
 ```
+
+`npm test` includes smoke coverage, protocol/storage hardening, a deterministic model-checking soak, and the standard fuzzer. `npm run fuzz` raises the randomized sync and soak coverage. `npm run soak` runs a longer deterministic network schedule pass with packet loss, reordering, duplication, reconnects, peer churn, storage restores, and partial compaction paths.
 
 ## Benchmarks
 
@@ -134,13 +184,14 @@ Run the package-local benchmark:
 npm run bench
 ```
 
-Latest local package benchmark on Node v26.1.0, darwin arm64, 5 rounds:
+Latest local package benchmark on Node v26.1.0, darwin arm64, 7 rounds:
 
 | Fixture | Median | p95 |
 | --- | ---: | ---: |
-| Sync open/update/ack exchange | 20.93 us | 28.87 us |
-| Sync message encode/decode | 6.33 us | 10.51 us |
-| Memory storage update append | 3.16 us | 9.95 us |
+| Sync open/update/ack exchange | 11.19 us | 15.94 us |
+| Sync message encode/decode | 3.76 us | 4.74 us |
+| Model queue duplicate/drop | 1.28 us | 5.95 us |
+| Memory storage update append | 2.60 us | 6.47 us |
 
 These are Frontier-only package measurements, not competitor comparisons.
 

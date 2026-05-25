@@ -7,14 +7,15 @@ import {
 import type {
   CrdtSnapshot,
   CrdtStateVector,
+  CrdtMemoryStorageAdapterOptions,
   CrdtStorageAdapter,
   CrdtStorageEvent,
   CrdtStorageEventListener,
   CrdtUpdateInput
 } from './types.js';
 
-export function createCrdtMemoryStorageAdapter(): CrdtStorageAdapter {
-  return new FrontierCrdtMemoryStorageAdapter();
+export function createCrdtMemoryStorageAdapter(options?: CrdtMemoryStorageAdapterOptions): CrdtStorageAdapter {
+  return new FrontierCrdtMemoryStorageAdapter(options);
 }
 
 class FrontierCrdtMemoryStorageAdapter implements CrdtStorageAdapter {
@@ -22,6 +23,12 @@ class FrontierCrdtMemoryStorageAdapter implements CrdtStorageAdapter {
   private readonly updates = new Map<string, Uint8Array[]>();
   private readonly listeners = new Set<CrdtStorageEventListener>();
   private readonly documentListeners = new Map<string, Set<CrdtStorageEventListener>>();
+  private readonly mutationQueues = new Map<string, Promise<void>>();
+  private readonly validateUpdates: boolean;
+
+  constructor(options?: CrdtMemoryStorageAdapterOptions) {
+    this.validateUpdates = options?.validateUpdates === true;
+  }
 
   loadSnapshot(documentId: string): CrdtSnapshot | undefined {
     const snapshot = this.snapshots.get(documentId);
@@ -38,47 +45,40 @@ class FrontierCrdtMemoryStorageAdapter implements CrdtStorageAdapter {
   appendUpdate(documentId: string, update: CrdtUpdateInput): void | Promise<void> {
     assertDocumentId(documentId);
     const stored = cloneEncodedUpdateSync(update);
-    if (stored !== undefined) {
+    if (stored !== undefined && !this.validateUpdates && !this.hasPendingMutation(documentId)) {
       this.appendStoredUpdate(documentId, stored);
       return;
     }
-    return cloneEncodedUpdate(update).then((encoded) => {
+    return this.enqueueMutation(documentId, async () => {
+      const encoded = stored ?? await cloneEncodedUpdate(update);
+      if (this.validateUpdates) await validateStoredUpdate(encoded);
       this.appendStoredUpdate(documentId, encoded);
     });
   }
 
   replaceUpdates(documentId: string, updates: readonly CrdtUpdateInput[]): void | Promise<void> {
     assertDocumentId(documentId);
-    if (updates.length === 0) {
+    if (updates.length === 0 && !this.hasPendingMutation(documentId)) {
       this.updates.delete(documentId);
       this.emit({ type: 'replace-updates', documentId, updateCount: 0 });
       return;
     }
-    const next: Uint8Array[] = new Array(updates.length);
-    const pending: Array<Promise<void>> = [];
-    for (let i = 0; i < updates.length; i++) {
-      const stored = cloneEncodedUpdateSync(updates[i]);
-      if (stored !== undefined) {
-        next[i] = stored;
-      } else {
-        pending[pending.length] = cloneEncodedUpdate(updates[i]).then((encoded) => {
-          next[i] = encoded;
-        });
-      }
-    }
-    if (pending.length === 0) {
-      this.replaceStoredUpdates(documentId, next);
+    const prepared = this.prepareUpdates(updates);
+    if (prepared.pending.length === 0 && !this.validateUpdates && !this.hasPendingMutation(documentId)) {
+      this.replaceStoredUpdates(documentId, prepared.next);
       return;
     }
-    return Promise.all(pending).then(() => {
-      this.replaceStoredUpdates(documentId, next);
+    return this.enqueueMutation(documentId, async () => {
+      await Promise.all(prepared.pending);
+      if (this.validateUpdates) await validateStoredUpdates(prepared.next);
+      this.replaceStoredUpdates(documentId, prepared.next);
     });
   }
 
   compact(documentId: string, snapshot: CrdtSnapshot, updates: readonly CrdtUpdateInput[] = []): void | Promise<void> {
     assertDocumentId(documentId);
     const storedSnapshot = cloneCrdtSnapshot(snapshot);
-    if (updates.length === 0) {
+    if (updates.length === 0 && !this.hasPendingMutation(documentId)) {
       this.snapshots.set(documentId, storedSnapshot);
       this.updates.delete(documentId);
       this.emit({
@@ -89,24 +89,15 @@ class FrontierCrdtMemoryStorageAdapter implements CrdtStorageAdapter {
       });
       return;
     }
-    const next: Uint8Array[] = new Array(updates.length);
-    const pending: Array<Promise<void>> = [];
-    for (let i = 0; i < updates.length; i++) {
-      const stored = cloneEncodedUpdateSync(updates[i]);
-      if (stored !== undefined) {
-        next[i] = stored;
-      } else {
-        pending[pending.length] = cloneEncodedUpdate(updates[i]).then((encoded) => {
-          next[i] = encoded;
-        });
-      }
-    }
-    if (pending.length === 0) {
-      this.compactStoredUpdates(documentId, storedSnapshot, next);
+    const prepared = this.prepareUpdates(updates);
+    if (prepared.pending.length === 0 && !this.validateUpdates && !this.hasPendingMutation(documentId)) {
+      this.compactStoredUpdates(documentId, storedSnapshot, prepared.next);
       return;
     }
-    return Promise.all(pending).then(() => {
-      this.compactStoredUpdates(documentId, storedSnapshot, next);
+    return this.enqueueMutation(documentId, async () => {
+      await Promise.all(prepared.pending);
+      if (this.validateUpdates) await validateStoredUpdates(prepared.next);
+      this.compactStoredUpdates(documentId, storedSnapshot, prepared.next);
     });
   }
 
@@ -191,6 +182,35 @@ class FrontierCrdtMemoryStorageAdapter implements CrdtStorageAdapter {
     });
   }
 
+  private prepareUpdates(updates: readonly CrdtUpdateInput[]): { next: Uint8Array[]; pending: Array<Promise<void>> } {
+    const next: Uint8Array[] = new Array(updates.length);
+    const pending: Array<Promise<void>> = [];
+    for (let i = 0; i < updates.length; i++) {
+      const stored = cloneEncodedUpdateSync(updates[i]);
+      if (stored !== undefined) {
+        next[i] = stored;
+      } else {
+        pending[pending.length] = cloneEncodedUpdate(updates[i]).then((encoded) => {
+          next[i] = encoded;
+        });
+      }
+    }
+    return { next, pending };
+  }
+
+  private hasPendingMutation(documentId: string): boolean {
+    return this.mutationQueues.has(documentId);
+  }
+
+  private enqueueMutation(documentId: string, task: () => void | Promise<void>): Promise<void> {
+    const previous = this.mutationQueues.get(documentId) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(task);
+    this.mutationQueues.set(documentId, next);
+    return next.finally(() => {
+      if (this.mutationQueues.get(documentId) === next) this.mutationQueues.delete(documentId);
+    });
+  }
+
   private async loadMissingUpdates(updates: readonly Uint8Array[], stateVector: CrdtStateVector): Promise<Uint8Array[]> {
     const { diffCrdtUpdate, inspectCrdtUpdate } = await import('@shapeshift-labs/frontier-crdt/update');
     const missing: Uint8Array[] = [];
@@ -207,6 +227,15 @@ class FrontierCrdtMemoryStorageAdapter implements CrdtStorageAdapter {
     const listeners = this.documentListeners.get(event.documentId);
     if (listeners !== undefined) listeners.forEach((listener) => listener(cloneCrdtStorageEvent(event)));
   }
+}
+
+async function validateStoredUpdates(updates: readonly Uint8Array[]): Promise<void> {
+  for (let i = 0; i < updates.length; i++) await validateStoredUpdate(updates[i]);
+}
+
+async function validateStoredUpdate(update: Uint8Array): Promise<void> {
+  const { inspectCrdtUpdate } = await import('@shapeshift-labs/frontier-crdt/update');
+  inspectCrdtUpdate(update);
 }
 
 function cloneCrdtStorageEvent(event: CrdtStorageEvent): CrdtStorageEvent {

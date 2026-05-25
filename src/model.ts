@@ -1,6 +1,8 @@
 export {
   createCrdtSyncModelChecker,
-  checkCrdtSyncConvergence
+  checkCrdtSyncConvergence,
+  minimizeCrdtSyncModelSchedule,
+  replayCrdtSyncModelSchedule
 } from './crdt-sync-model.js';
 
 export type {
@@ -13,6 +15,11 @@ export type {
   CrdtSyncModelDrainOptions,
   CrdtSyncModelEvent,
   CrdtSyncModelEventType,
+  CrdtSyncModelFailurePredicate,
+  CrdtSyncModelMinimizeOptions,
+  CrdtSyncModelReplayHooks,
+  CrdtSyncModelReplayResult,
+  CrdtSyncModelScheduleAction,
   CrdtSyncModelSnapshot,
   CrdtSyncQueuedMessage
 } from './types.js';

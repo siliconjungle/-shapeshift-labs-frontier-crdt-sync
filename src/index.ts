@@ -1,6 +1,8 @@
 export {
   checkCrdtSyncConvergence,
-  createCrdtSyncModelChecker
+  createCrdtSyncModelChecker,
+  minimizeCrdtSyncModelSchedule,
+  replayCrdtSyncModelSchedule
 } from './crdt-sync-model.js';
 export {
   createCrdtDocumentUrl,
