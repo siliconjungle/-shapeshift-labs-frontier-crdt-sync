@@ -1,52 +1,146 @@
 # Frontier CRDT Sync
 
-Reserved package name for the future Frontier CRDT sync, repo, provider, and storage layer.
+Sync protocol, repo, storage, provider, and binding contracts for Frontier CRDT documents.
 
-This package is not ready for production use. It exists so the package and repository names are reserved while the CRDT sync protocol, storage, provider, repo, and editor-binding boundaries are finalized.
+This package sits above [`@shapeshift-labs/frontier-crdt`](https://www.npmjs.com/package/@shapeshift-labs/frontier-crdt). It keeps transport, persistence, document handles, local sync networks, model-checking helpers, and editor-facing sync bindings out of the core CRDT document package.
 
 - npm: [`@shapeshift-labs/frontier-crdt-sync`](https://www.npmjs.com/package/@shapeshift-labs/frontier-crdt-sync)
 - source: [`siliconjungle/-shapeshift-labs-frontier-crdt-sync`](https://github.com/siliconjungle/-shapeshift-labs-frontier-crdt-sync)
-- CRDT package: [`@shapeshift-labs/frontier-crdt`](https://www.npmjs.com/package/@shapeshift-labs/frontier-crdt)
-- core package: [`@shapeshift-labs/frontier`](https://www.npmjs.com/package/@shapeshift-labs/frontier)
 - license: MIT
 
-## Intended Scope
+## Related Packages
 
-When this package graduates from placeholder status, it is expected to contain:
+- [`@shapeshift-labs/frontier-crdt`](https://www.npmjs.com/package/@shapeshift-labs/frontier-crdt): native CRDT document and update layer.
+- [`@shapeshift-labs/frontier`](https://www.npmjs.com/package/@shapeshift-labs/frontier): core JSON diff/apply primitives below the CRDT layer.
+- [`@shapeshift-labs/frontier-codec`](https://www.npmjs.com/package/@shapeshift-labs/frontier-codec): patch/history codec layer below CRDT update tooling.
+- [`@shapeshift-labs/frontier-state`](https://www.npmjs.com/package/@shapeshift-labs/frontier-state): app-state engine layer for routed views.
 
-- sync states, endpoint messages, and encoded sync message envelopes;
-- transport-agnostic providers;
-- document handles, repos, document URLs, and memory storage;
-- storage compaction helpers;
-- local sync networks, model-checking helpers, and convergence checks;
-- plain text binding contracts.
+Package source repositories:
 
-It should depend on `@shapeshift-labs/frontier-crdt`. It should stay separate from the CRDT document model itself, the small JSON diff/apply core, logging, schema validation, and app-state subscriptions.
+- [`siliconjungle/-shapeshift-labs-frontier`](https://github.com/siliconjungle/-shapeshift-labs-frontier)
+- [`siliconjungle/-shapeshift-labs-frontier-crdt`](https://github.com/siliconjungle/-shapeshift-labs-frontier-crdt)
+- [`siliconjungle/-shapeshift-labs-frontier-crdt-sync`](https://github.com/siliconjungle/-shapeshift-labs-frontier-crdt-sync)
 
-## Current Status
+## Install
 
-Use [`@shapeshift-labs/frontier`](https://www.npmjs.com/package/@shapeshift-labs/frontier) for the stable JSON diff/apply core and [`@shapeshift-labs/frontier-codec`](https://www.npmjs.com/package/@shapeshift-labs/frontier-codec) for patch transport codecs.
+```sh
+npm install @shapeshift-labs/frontier @shapeshift-labs/frontier-crdt @shapeshift-labs/frontier-crdt-sync
+```
 
-The CRDT sync package is reserved only. No runtime API is exported yet.
+## Usage
 
-## Package Family
+```ts
+import { createCrdtDocument } from '@shapeshift-labs/frontier-crdt';
+import {
+  createCrdtSyncEndpoint,
+  encodeCrdtSyncMessage,
+  decodeCrdtSyncMessage
+} from '@shapeshift-labs/frontier-crdt-sync';
 
-Published or active packages:
+const alice = createCrdtDocument({ actorId: 'alice' });
+const bob = createCrdtDocument({ actorId: 'bob' });
 
-- [`@shapeshift-labs/frontier`](https://www.npmjs.com/package/@shapeshift-labs/frontier)
-- [`@shapeshift-labs/frontier-codec`](https://www.npmjs.com/package/@shapeshift-labs/frontier-codec)
-- [`@shapeshift-labs/frontier-mutation`](https://www.npmjs.com/package/@shapeshift-labs/frontier-mutation)
+alice.set('/title', 'Draft');
 
-Reserved future packages:
+const aliceSync = createCrdtSyncEndpoint(alice, {
+  documentId: 'doc-1',
+  senderId: 'alice'
+});
+const bobSync = createCrdtSyncEndpoint(bob, {
+  documentId: 'doc-1',
+  senderId: 'bob'
+});
 
-- `@shapeshift-labs/frontier-engine`
-- `@shapeshift-labs/frontier-state`
-- `@shapeshift-labs/frontier-crdt`
-- `@shapeshift-labs/frontier-richtext`
-- `@shapeshift-labs/frontier-logging`
-- `@shapeshift-labs/frontier-state-cache`
-- `@shapeshift-labs/frontier-event-log`
-- `@shapeshift-labs/frontier-schema`
+const hello = bobSync.open('alice');
+const update = aliceSync.receive('bob', hello);
+
+if (update) {
+  bobSync.receive('alice', decodeCrdtSyncMessage(encodeCrdtSyncMessage(update)));
+}
+
+console.log(bob.toJSON());
+```
+
+## API
+
+```ts
+import {
+  createCrdtSyncState,
+  createCrdtSyncEndpoint,
+  createCrdtSyncProvider,
+  createCrdtDocHandle,
+  createCrdtRepo,
+  createCrdtMemoryStorageAdapter,
+  compactCrdtStorage,
+  createCrdtDocumentUrl,
+  parseCrdtDocumentUrl,
+  createCrdtLocalSyncNetwork,
+  createCrdtSyncModelChecker,
+  checkCrdtSyncConvergence,
+  createCrdtTextBinding,
+  encodeCrdtSyncMessage,
+  decodeCrdtSyncMessage
+} from '@shapeshift-labs/frontier-crdt-sync';
+```
+
+## Subpath Imports
+
+The package currently exposes focused subpaths for the planned package story:
+
+```ts
+import { createCrdtSyncEndpoint } from '@shapeshift-labs/frontier-crdt-sync/sync';
+import { createCrdtRepo } from '@shapeshift-labs/frontier-crdt-sync/repo';
+import { createCrdtMemoryStorageAdapter } from '@shapeshift-labs/frontier-crdt-sync/storage';
+import { createCrdtSyncProvider } from '@shapeshift-labs/frontier-crdt-sync/provider';
+import { createCrdtSyncModelChecker } from '@shapeshift-labs/frontier-crdt-sync/model';
+import { createCrdtTextBinding } from '@shapeshift-labs/frontier-crdt-sync/text-binding';
+```
+
+Each subpath has its own narrow package entry and export surface. The implementation still shares the same sync runtime internally while the module boundaries settle.
+
+## Package Scope
+
+This package is intentionally limited to:
+
+- Sync states, endpoint messages, and encoded sync message envelopes.
+- Transport-agnostic providers.
+- Document handles, repos, document URLs, and memory storage.
+- Storage compaction helpers.
+- Local sync networks, model-checking helpers, and convergence checks.
+- Plain text binding contracts.
+
+It does not expose logging, schema validation, app-state subscriptions, or the small JSON diff/apply core API.
+
+## TypeScript
+
+The package ships ESM JavaScript plus `.d.ts` declarations for the root export and public subpaths. The package-local TypeScript source lives in `src/` and compiles directly to `dist/`.
+
+## Validation
+
+```sh
+npm test
+npm run fuzz
+npm run bench
+npm run pack:dry
+```
+
+## Benchmarks
+
+Run the package-local benchmark:
+
+```sh
+npm run bench
+```
+
+Latest local package benchmark on Node v26.1.0, darwin arm64, 3 rounds:
+
+| Fixture | Median | p95 |
+| --- | ---: | ---: |
+| Sync open/update/ack exchange | 12.05 us | 12.84 us |
+| Sync message encode/decode | 3.52 us | 3.54 us |
+| Memory storage update append | 2.87 us | 6.80 us |
+
+These are Frontier-only package measurements, not competitor comparisons.
 
 ## License
 

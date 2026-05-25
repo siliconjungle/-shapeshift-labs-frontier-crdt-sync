@@ -1,7 +1,7 @@
 {
   "name": "@shapeshift-labs/frontier-crdt-sync",
-  "version": "0.0.2",
-  "description": "Reserved package name for the future Frontier CRDT sync, repo, provider, and storage layer.",
+  "version": "0.1.0",
+  "description": "Sync protocol, repo, storage, provider, and binding contracts for Frontier CRDT documents.",
   "type": "module",
   "license": "MIT",
   "sideEffects": false,
@@ -13,27 +13,70 @@
   "bugs": {
     "url": "https://github.com/siliconjungle/-shapeshift-labs-frontier-crdt-sync/issues"
   },
-  "main": "./index.js",
-  "types": "./index.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./index.d.ts",
-      "import": "./index.js",
-      "default": "./index.js"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./sync": {
+      "types": "./dist/sync.d.ts",
+      "import": "./dist/sync.js",
+      "default": "./dist/sync.js"
+    },
+    "./repo": {
+      "types": "./dist/repo.d.ts",
+      "import": "./dist/repo.js",
+      "default": "./dist/repo.js"
+    },
+    "./storage": {
+      "types": "./dist/storage.d.ts",
+      "import": "./dist/storage.js",
+      "default": "./dist/storage.js"
+    },
+    "./provider": {
+      "types": "./dist/provider.d.ts",
+      "import": "./dist/provider.js",
+      "default": "./dist/provider.js"
+    },
+    "./model": {
+      "types": "./dist/model.d.ts",
+      "import": "./dist/model.js",
+      "default": "./dist/model.js"
+    },
+    "./text-binding": {
+      "types": "./dist/text-binding.d.ts",
+      "import": "./dist/text-binding.js",
+      "default": "./dist/text-binding.js"
     },
     "./package.json": "./package.json"
   },
   "files": [
-    "index.js",
-    "index.d.ts",
+    "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "benchmarks/package-bench.mjs"
   ],
   "engines": {
     "node": ">=18"
   },
+  "dependencies": {
+    "@shapeshift-labs/frontier-crdt": "^0.1.0",
+    "@shapeshift-labs/frontier": "^0.1.5"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  },
   "scripts": {
-    "test": "node -e \"import('./index.js').catch((error) => { if (!String(error && error.message).includes('reserved placeholder')) process.exit(1); })\""
+    "build": "node build.mjs",
+    "test": "npm run build && npm run typecheck && node test/smoke.mjs && node test/fuzz.mjs --cases 120",
+    "prepack": "npm run test",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "fuzz": "npm run build && node test/fuzz.mjs",
+    "bench": "npm run build && node benchmarks/package-bench.mjs",
+    "pack:dry": "npm pack --dry-run"
   },
   "keywords": [
     "frontier",
@@ -41,6 +84,6 @@
     "sync",
     "local-first",
     "storage",
-    "reserved"
+    "collaboration"
   ]
 }
