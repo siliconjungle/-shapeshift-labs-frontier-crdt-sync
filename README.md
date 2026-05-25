@@ -11,6 +11,7 @@ This package sits above [`@shapeshift-labs/frontier-crdt`](https://www.npmjs.com
 ## Related Packages
 
 - [`@shapeshift-labs/frontier-crdt`](https://www.npmjs.com/package/@shapeshift-labs/frontier-crdt): native CRDT document and update layer.
+- [`@shapeshift-labs/frontier-crdt-websocket`](https://www.npmjs.com/package/@shapeshift-labs/frontier-crdt-websocket): concrete WebSocket client/server transport for this package's providers.
 - [`@shapeshift-labs/frontier`](https://www.npmjs.com/package/@shapeshift-labs/frontier): core JSON diff/apply primitives below the CRDT layer.
 - [`@shapeshift-labs/frontier-codec`](https://www.npmjs.com/package/@shapeshift-labs/frontier-codec): patch/history codec layer below CRDT update tooling.
 - [`@shapeshift-labs/frontier-state`](https://www.npmjs.com/package/@shapeshift-labs/frontier-state): app-state engine layer for routed views.
@@ -20,6 +21,7 @@ Package source repositories:
 - [`siliconjungle/-shapeshift-labs-frontier`](https://github.com/siliconjungle/-shapeshift-labs-frontier)
 - [`siliconjungle/-shapeshift-labs-frontier-crdt`](https://github.com/siliconjungle/-shapeshift-labs-frontier-crdt)
 - [`siliconjungle/-shapeshift-labs-frontier-crdt-sync`](https://github.com/siliconjungle/-shapeshift-labs-frontier-crdt-sync)
+- [`siliconjungle/-shapeshift-labs-frontier-crdt-websocket`](https://github.com/siliconjungle/-shapeshift-labs-frontier-crdt-websocket)
 
 ## Install
 
@@ -109,7 +111,7 @@ This package is intentionally limited to:
 - Local sync networks, model-checking helpers, and convergence checks.
 - Plain text binding contracts.
 
-It does not expose logging, schema validation, app-state subscriptions, or the small JSON diff/apply core API.
+It does not expose logging, schema validation, app-state subscriptions, concrete network transports, or the small JSON diff/apply core API. Use [`@shapeshift-labs/frontier-crdt-websocket`](https://www.npmjs.com/package/@shapeshift-labs/frontier-crdt-websocket) for WebSocket client/server wiring.
 
 ## TypeScript
 
@@ -132,13 +134,13 @@ Run the package-local benchmark:
 npm run bench
 ```
 
-Latest local package benchmark on Node v26.1.0, darwin arm64, 3 rounds:
+Latest local package benchmark on Node v26.1.0, darwin arm64, 5 rounds:
 
 | Fixture | Median | p95 |
 | --- | ---: | ---: |
-| Sync open/update/ack exchange | 12.05 us | 12.84 us |
-| Sync message encode/decode | 3.52 us | 3.54 us |
-| Memory storage update append | 2.87 us | 6.80 us |
+| Sync open/update/ack exchange | 20.93 us | 28.87 us |
+| Sync message encode/decode | 6.33 us | 10.51 us |
+| Memory storage update append | 3.16 us | 9.95 us |
 
 These are Frontier-only package measurements, not competitor comparisons.
 
