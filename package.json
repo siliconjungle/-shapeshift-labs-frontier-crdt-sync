@@ -68,9 +68,9 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@shapeshift-labs/frontier-crdt": "^0.1.0",
-    "@shapeshift-labs/frontier-event-log": "^0.1.2",
-    "@shapeshift-labs/frontier": "^0.1.5"
+    "@shapeshift-labs/frontier-crdt": "0.1.4",
+    "@shapeshift-labs/frontier-event-log": "0.1.2",
+    "@shapeshift-labs/frontier": "0.1.8"
   },
   "devDependencies": {
     "typescript": "^6.0.3"
