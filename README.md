@@ -10,6 +10,9 @@ This package sits above [`@shapeshift-labs/frontier-crdt`](https://www.npmjs.com
 
 ## Related Packages
 
+- [`@shapeshift-labs/frontier-state-cache-idb`](https://www.npmjs.com/package/@shapeshift-labs/frontier-state-cache-idb): IndexedDB persistence adapter for Frontier state-cache snapshots.
+- [`@shapeshift-labs/frontier-state-cache-file`](https://www.npmjs.com/package/@shapeshift-labs/frontier-state-cache-file): Structured file persistence adapter for Frontier state-cache snapshots and change logs.
+- [`@shapeshift-labs/frontier-state-cache-sql`](https://www.npmjs.com/package/@shapeshift-labs/frontier-state-cache-sql): SQL persistence adapter for Frontier state-cache snapshots and change logs.
 - [`@shapeshift-labs/frontier-crdt`](https://www.npmjs.com/package/@shapeshift-labs/frontier-crdt): native CRDT document and update layer.
 - [`@shapeshift-labs/frontier-crdt-websocket`](https://www.npmjs.com/package/@shapeshift-labs/frontier-crdt-websocket): concrete WebSocket client/server transport for this package's providers.
 - [`@shapeshift-labs/frontier`](https://www.npmjs.com/package/@shapeshift-labs/frontier): core JSON diff/apply primitives below the CRDT layer.
@@ -18,6 +21,9 @@ This package sits above [`@shapeshift-labs/frontier-crdt`](https://www.npmjs.com
 
 Package source repositories:
 
+- [`siliconjungle/-shapeshift-labs-frontier-state-cache-idb`](https://github.com/siliconjungle/-shapeshift-labs-frontier-state-cache-idb)
+- [`siliconjungle/-shapeshift-labs-frontier-state-cache-file`](https://github.com/siliconjungle/-shapeshift-labs-frontier-state-cache-file)
+- [`siliconjungle/-shapeshift-labs-frontier-state-cache-sql`](https://github.com/siliconjungle/-shapeshift-labs-frontier-state-cache-sql)
 - [`siliconjungle/-shapeshift-labs-frontier`](https://github.com/siliconjungle/-shapeshift-labs-frontier)
 - [`siliconjungle/-shapeshift-labs-frontier-crdt`](https://github.com/siliconjungle/-shapeshift-labs-frontier-crdt)
 - [`siliconjungle/-shapeshift-labs-frontier-crdt-sync`](https://github.com/siliconjungle/-shapeshift-labs-frontier-crdt-sync)
@@ -96,13 +102,74 @@ import { createCrdtMemoryStorageAdapter } from '@shapeshift-labs/frontier-crdt-s
 import { createCrdtSyncProvider } from '@shapeshift-labs/frontier-crdt-sync/provider';
 import {
   createCrdtSyncModelChecker,
+  replayCrdtSyncModelReproScenario,
+  minimizeCrdtSyncModelReproScenario,
+  createCrdtSyncModelReproArtifact,
   replayCrdtSyncModelSchedule,
   minimizeCrdtSyncModelSchedule
 } from '@shapeshift-labs/frontier-crdt-sync/model';
+import { createCrdtSyncReplayArtifactStore } from '@shapeshift-labs/frontier-crdt-sync/forensics';
 import { createCrdtTextBinding } from '@shapeshift-labs/frontier-crdt-sync/text-binding';
 ```
 
 Each subpath has its own narrow package entry and export surface. The implementation still shares the same sync runtime internally while the module boundaries settle.
+
+## Failure Forensics
+
+The `./model` subpath can replay and minimize sync failure histories as reproducible artifacts:
+
+```ts
+import {
+  replayCrdtSyncModelReproScenario,
+  minimizeCrdtSyncModelReproScenario,
+  createCrdtSyncModelReproArtifact
+} from '@shapeshift-labs/frontier-crdt-sync/model';
+
+const scenario = {
+  documentId: 'case-1',
+  peers: [
+    {
+      peerId: 'alice',
+      history: [{ type: 'set', path: '/title', value: 'long failing title' }]
+    },
+    { peerId: 'bob', history: [] },
+    { peerId: 'noise', history: [{ type: 'set', path: '/tmp', value: 'remove me' }] }
+  ],
+  schedule: [
+    { type: 'sync', from: 'alice', to: 'bob' },
+    { type: 'drop-next', count: 3 },
+    { type: 'deliver-next' }
+  ]
+} as const;
+
+const minimized = await minimizeCrdtSyncModelReproScenario(scenario, async (candidate) => {
+  const replay = await replayCrdtSyncModelReproScenario(candidate);
+  return !replay.convergence.valid;
+});
+
+const artifact = createCrdtSyncModelReproArtifact(minimized, { original: scenario });
+```
+
+The minimizer keeps the predicate true while shrinking peer count, per-peer operation histories, operation payloads/indexes/counts, and network schedule actions. The artifact is plain JSON with a stable `kind`, summaries for original/minimized cases, replay status when provided, and the minimized scenario that can be checked back into a fuzzer corpus or attached to an issue.
+
+The package fuzzer records CRDT operations and sync steps while it runs. If convergence fails, it writes a minimized repro artifact to `FRONTIER_CRDT_SYNC_REPRO_DIR` when set, otherwise to the OS temp directory under `frontier-crdt-sync-repros`.
+
+## Replay Artifact Store
+
+The `./forensics` subpath stores minimized model-checker schedules in an event-log-owned replay artifact store:
+
+```ts
+import { createCrdtSyncReplayArtifactStore } from '@shapeshift-labs/frontier-crdt-sync/forensics';
+
+const store = createCrdtSyncReplayArtifactStore();
+const artifact = store.append([{ type: 'drain', maxSteps: 32 }], {
+  minimized: true,
+  metadata: { source: 'fuzzer' }
+});
+const checkpoint = store.checkpoint();
+```
+
+The store is intentionally off the root import. It keeps CRDT sync failure artifacts as snapshot-plus-bounded-change-log data owned by `@shapeshift-labs/frontier-event-log`, while the model-checker remains responsible for generating and minimizing schedules.
 
 ## Protocol Spec
 
@@ -154,6 +221,7 @@ This package is intentionally limited to:
 - Document handles, repos, document URLs, and memory storage.
 - Storage compaction helpers.
 - Local sync networks, model-checking helpers, and convergence checks.
+- Replay artifact storage for minimized sync schedules and repro metadata.
 - Plain text binding contracts.
 
 It does not expose logging, schema validation, app-state subscriptions, concrete network transports, or the small JSON diff/apply core API. Use [`@shapeshift-labs/frontier-crdt-websocket`](https://www.npmjs.com/package/@shapeshift-labs/frontier-crdt-websocket) for WebSocket client/server wiring.
@@ -182,14 +250,15 @@ Run the package-local benchmark:
 npm run bench
 ```
 
-Latest local package benchmark on Node v26.1.0, darwin arm64, 7 rounds:
+Latest local package benchmark on Node v26.1.0, darwin arm64, 15 rounds:
 
 | Fixture | Median | p95 |
 | --- | ---: | ---: |
-| Sync open/update/ack exchange | 11.85 us | 16.92 us |
-| Sync message encode/decode | 3.42 us | 6.55 us |
-| Model queue duplicate/drop | 1.31 us | 6.23 us |
-| Memory storage update append | 2.91 us | 7.85 us |
+| Sync open/update/ack exchange | 14.65 us | 23.90 us |
+| Sync message encode/decode | 3.60 us | 7.01 us |
+| Model queue duplicate/drop | 1.47 us | 2.79 us |
+| Replay artifact append/checkpoint | 10.83 us | 12.85 us |
+| Memory storage update append | 4.33 us | 10.46 us |
 
 These are Frontier-only package measurements, not competitor comparisons.
 

@@ -1,4 +1,7 @@
 import assert from 'node:assert';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { createCrdtDocument } from '@shapeshift-labs/frontier-crdt';
 import {
   checkCrdtSyncConvergence,
@@ -10,6 +13,11 @@ import {
   encodeCrdtSyncMessage,
   parseCrdtDocumentUrl
 } from '../dist/index.js';
+import {
+  createCrdtSyncModelReproArtifact,
+  minimizeCrdtSyncModelReproScenario,
+  replayCrdtSyncModelReproScenario
+} from '../dist/model.js';
 
 const args = parseArgs(process.argv.slice(2));
 const cases = readPositiveInt(args.cases, 240);
@@ -25,12 +33,16 @@ console.log(`frontier crdt-sync fuzz passed cases=${cases} steps=${steps} seed=$
 async function runCase(caseIndex) {
   const peerCount = 2 + randInt(3);
   const peers = [];
+  const schedule = [];
   for (let i = 0; i < peerCount; i++) {
     const id = `peer-${caseIndex}-${i}`;
-    const doc = createCrdtDocument({ actorId: `actor-${caseIndex}-${i}` });
+    const actorId = `actor-${caseIndex}-${i}`;
+    const doc = createCrdtDocument({ actorId });
     peers.push({
       id,
+      actorId,
       doc,
+      history: [],
       endpoint: createCrdtSyncEndpoint(doc, {
         documentId: `doc-${caseIndex}`,
         senderId: id,
@@ -42,21 +54,27 @@ async function runCase(caseIndex) {
   for (let step = 0; step < steps; step++) {
     const choice = randInt(10);
     if (choice < 6) {
-      mutate(peers[randInt(peerCount)].doc, caseIndex, step);
+      const peer = peers[randInt(peerCount)];
+      const op = mutate(peer.doc, caseIndex, step);
+      if (op !== undefined) peer.history.push(op);
     } else {
-      await syncPair(peers[randInt(peerCount)], peers[randInt(peerCount)]);
+      await syncPair(peers[randInt(peerCount)], peers[randInt(peerCount)], schedule);
     }
   }
 
   for (let round = 0; round < peerCount + 2; round++) {
     for (let left = 0; left < peerCount; left++) {
       for (let right = 0; right < peerCount; right++) {
-        if (left !== right) await syncPair(peers[left], peers[right]);
+        if (left !== right) await syncPair(peers[left], peers[right], schedule);
       }
     }
   }
 
   const convergence = checkCrdtSyncConvergence(peers.map((peer) => peer.doc));
+  if (!convergence.valid) {
+    const artifactPath = await exportFuzzReproArtifact(caseIndex, peers, schedule);
+    console.error('wrote CRDT sync fuzz repro artifact: ' + artifactPath);
+  }
   assert.strictEqual(convergence.valid, true, JSON.stringify(convergence.mismatches));
   await fuzzStorage(caseIndex, peers[0].doc.exportUpdate());
   fuzzUrls(caseIndex);
@@ -65,42 +83,63 @@ async function runCase(caseIndex) {
 function mutate(doc, caseIndex, step) {
   const view = doc.toJSON() || {};
   switch (randInt(7)) {
-    case 0:
-      doc.set(`/items/k${randInt(8)}`, { caseIndex, step, value: randInt(1000) });
-      break;
-    case 1:
-      doc.delete(`/items/k${randInt(8)}`);
-      break;
+    case 0: {
+      const path = `/items/k${randInt(8)}`;
+      const value = { caseIndex, step, value: randInt(1000) };
+      doc.set(path, value);
+      return { type: 'set', path, value };
+    }
+    case 1: {
+      const path = `/items/k${randInt(8)}`;
+      doc.delete(path);
+      return { type: 'delete', path };
+    }
     case 2: {
       const text = typeof view.body === 'string' ? view.body : '';
       const index = randInt(text.length + 1);
-      doc.text('/body').insert(index, String.fromCharCode(97 + randInt(26)));
-      break;
+      const insert = String.fromCharCode(97 + randInt(26));
+      doc.text('/body').insert(index, insert);
+      return { type: 'text-insert', path: '/body', index, text: insert };
     }
     case 3: {
       const text = typeof view.body === 'string' ? view.body : '';
-      if (text.length > 0) doc.text('/body').delete(randInt(text.length), 1);
+      if (text.length > 0) {
+        const index = randInt(text.length);
+        doc.text('/body').delete(index, 1);
+        return { type: 'text-delete', path: '/body', index, count: 1 };
+      }
       break;
     }
-    case 4:
-      doc.counter('/count').increment(randInt(5) - 2);
-      break;
+    case 4: {
+      const delta = randInt(5) - 2;
+      doc.counter('/count').increment(delta);
+      return { type: 'counter', path: '/count', delta };
+    }
     case 5: {
       const list = Array.isArray(view.list) ? view.list : [];
-      doc.list('/list').insert(randInt(list.length + 1), { step, n: randInt(32) });
-      break;
+      const index = randInt(list.length + 1);
+      const value = { step, n: randInt(32) };
+      doc.list('/list').insert(index, value);
+      return { type: 'list-insert', path: '/list', index, value };
     }
     default: {
       const list = Array.isArray(view.list) ? view.list : [];
-      if (list.length > 0) doc.list('/list').delete(randInt(list.length), 1);
+      if (list.length > 0) {
+        const index = randInt(list.length);
+        doc.list('/list').delete(index, 1);
+        return { type: 'list-delete', path: '/list', index, count: 1 };
+      }
       break;
     }
   }
+  return undefined;
 }
 
-async function syncPair(left, right) {
+async function syncPair(left, right, schedule) {
   if (left === right) return;
+  schedule.push({ type: 'sync', from: right.id, to: left.id }, { type: 'drain', maxSteps: 64 });
   await driveSync(left, right);
+  schedule.push({ type: 'sync', from: left.id, to: right.id }, { type: 'drain', maxSteps: 64 });
   await driveSync(right, left);
 }
 
@@ -153,6 +192,37 @@ function fuzzUrls(caseIndex) {
   assert.strictEqual(parsed.documentId, `doc/${caseIndex}`);
   assert.ok(parsed.peerId?.startsWith('peer-'));
   assert.strictEqual(parsed.params.enabled, 'true');
+}
+
+async function exportFuzzReproArtifact(caseIndex, peers, schedule) {
+  const scenario = {
+    documentId: `doc-${caseIndex}`,
+    peers: peers.map((peer) => ({
+      peerId: peer.id,
+      actorId: peer.actorId,
+      history: peer.history
+    })),
+    schedule
+  };
+  const predicate = async (candidate) => {
+    const replay = await replayCrdtSyncModelReproScenario(candidate);
+    return !replay.convergence.valid;
+  };
+  const minimized = await predicate(scenario)
+    ? await minimizeCrdtSyncModelReproScenario(scenario, predicate)
+    : scenario;
+  const replay = await replayCrdtSyncModelReproScenario(minimized);
+  const artifact = createCrdtSyncModelReproArtifact(minimized, {
+    original: scenario,
+    replay,
+    note: `fuzz case ${caseIndex}`
+  });
+  const reproDir = process.env.FRONTIER_CRDT_SYNC_REPRO_DIR ||
+    path.join(os.tmpdir(), 'frontier-crdt-sync-repros');
+  await fs.mkdir(reproDir, { recursive: true });
+  const artifactPath = path.join(reproDir, `crdt-sync-fuzz-${caseIndex}-${Date.now()}.json`);
+  await fs.writeFile(artifactPath, JSON.stringify(artifact, null, 2) + '\n');
+  return artifactPath;
 }
 
 function randInt(max) {

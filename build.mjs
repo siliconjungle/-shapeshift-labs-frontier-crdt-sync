@@ -46,7 +46,11 @@ function readLocalDependencies(pkg) {
 function localPackageDir(name) {
   const shortName = name.startsWith('@shapeshift-labs/') ? name.slice('@shapeshift-labs/'.length) : name;
   const target = path.join(rootDir, 'packages', shortName);
-  return fs.existsSync(path.join(target, 'package.json')) ? target : null;
+  if (fs.existsSync(path.join(target, 'package.json'))) return target;
+  const standalone = path.join(rootDir, shortName);
+  if (fs.existsSync(path.join(standalone, 'package.json'))) return standalone;
+  const sibling = path.join(packageDir, '..', shortName);
+  return fs.existsSync(path.join(sibling, 'package.json')) ? sibling : null;
 }
 
 function linkLocalPackage(name, targetDir) {

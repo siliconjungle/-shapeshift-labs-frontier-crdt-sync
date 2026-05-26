@@ -12,7 +12,11 @@ import {
   encodeCrdtSyncMessage
 } from '../dist/index.js';
 import {
+  createCrdtSyncModelReproArtifact,
+  minimizeCrdtSyncModelReproScenario,
   minimizeCrdtSyncModelSchedule,
+  replayCrdtSyncModelReproScenario,
+  summarizeCrdtSyncModelReproScenario,
   replayCrdtSyncModelSchedule
 } from '../dist/model.js';
 
@@ -186,6 +190,93 @@ async function testReplayAndMinimize() {
   });
   assert.strictEqual(lifecycle.valid, true);
   assert.deepStrictEqual(lifecycle.snapshot.peerIds, ['life-a']);
+
+  const convergentReplay = await replayCrdtSyncModelReproScenario({
+    documentId: 'repro-converges',
+    peers: [
+      {
+        peerId: 'repro-converges-a',
+        history: [{ type: 'set', path: '/title', value: 'ready' }]
+      },
+      { peerId: 'repro-converges-b', history: [] }
+    ],
+    schedule: [],
+    finalSyncRounds: 2,
+    finalDrainMaxSteps: 2000
+  });
+  assert.strictEqual(convergentReplay.valid, true, JSON.stringify(convergentReplay.errors));
+  assert.deepStrictEqual(convergentReplay.views['repro-converges-b'], { title: 'ready' });
+
+  const reproScenario = {
+    documentId: 'repro-failure',
+    peers: [
+      {
+        peerId: 'repro-a',
+        actorId: 'repro-actor-a',
+        history: [
+          { type: 'set', path: '/keep', value: 'abcdefghijklmnopqrstuvwxyz' },
+          { type: 'text-insert', path: '/body', index: 0, text: 'this text is removable noise' }
+        ]
+      },
+      {
+        peerId: 'repro-b',
+        actorId: 'repro-actor-b',
+        history: [
+          { type: 'set', path: '/b-noise', value: { nested: true, payload: [1, 2, 3, 4] } }
+        ]
+      },
+      {
+        peerId: 'repro-c',
+        actorId: 'repro-actor-c',
+        history: [
+          { type: 'set', path: '/c-noise', value: 'remove this peer' },
+          { type: 'counter', path: '/count', delta: 7 },
+          { type: 'list-insert', path: '/items', index: 0, value: { noisy: true, value: 123 } }
+        ]
+      }
+    ],
+    schedule: [
+      { type: 'connect', peerId: 'repro-c' },
+      { type: 'duplicate-next', count: 4 },
+      { type: 'drop-next', count: 3 },
+      { type: 'heal' },
+      { type: 'deliver-next' },
+      { type: 'drain', maxSteps: 12 },
+      { type: 'disconnect', peerId: 'repro-c' }
+    ]
+  };
+  const reproPredicate = async (candidate) => {
+    const replay = await replayCrdtSyncModelReproScenario(candidate);
+    const aView = replay.views['repro-a'];
+    return !replay.convergence.valid &&
+      aView &&
+      typeof aView === 'object' &&
+      typeof aView.keep === 'string' &&
+      aView.keep.length > 0 &&
+      candidate.peers.length >= 2 &&
+      candidate.schedule.some((action) => action.type === 'drop-next') &&
+      candidate.schedule.some((action) => action.type === 'deliver-next');
+  };
+  const originalSummary = summarizeCrdtSyncModelReproScenario(reproScenario);
+  const minimizedRepro = await minimizeCrdtSyncModelReproScenario(reproScenario, reproPredicate);
+  const minimizedSummary = summarizeCrdtSyncModelReproScenario(minimizedRepro);
+  assert.strictEqual(await reproPredicate(minimizedRepro), true);
+  assert.ok(minimizedSummary.peerCount < originalSummary.peerCount);
+  assert.ok(minimizedSummary.operationCount < originalSummary.operationCount);
+  assert.ok(minimizedSummary.scheduleLength < originalSummary.scheduleLength);
+  assert.ok(minimizedSummary.contentBytes < originalSummary.contentBytes);
+  const minimizedReplay = await replayCrdtSyncModelReproScenario(minimizedRepro);
+  const artifact = createCrdtSyncModelReproArtifact(minimizedRepro, {
+    original: reproScenario,
+    replay: minimizedReplay,
+    generatedAt: '2026-05-26T00:00:00.000Z',
+    note: 'hardening fixture'
+  });
+  assert.strictEqual(artifact.kind, 'frontier-crdt-sync-model-repro');
+  assert.strictEqual(artifact.version, 1);
+  assert.strictEqual(artifact.replay.valid, false);
+  assert.ok(artifact.summary.minimized.contentBytes < artifact.summary.original.contentBytes);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(artifact)).scenario, artifact.scenario);
 }
 
 async function testStorageContracts() {

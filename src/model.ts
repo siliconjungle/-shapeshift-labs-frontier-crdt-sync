@@ -1,8 +1,12 @@
 export {
   createCrdtSyncModelChecker,
+  createCrdtSyncModelReproArtifact,
   checkCrdtSyncConvergence,
+  minimizeCrdtSyncModelReproScenario,
   minimizeCrdtSyncModelSchedule,
-  replayCrdtSyncModelSchedule
+  replayCrdtSyncModelReproScenario,
+  replayCrdtSyncModelSchedule,
+  summarizeCrdtSyncModelReproScenario
 } from './crdt-sync-model.js';
 
 export type {
@@ -22,6 +26,17 @@ export type {
 export type {
   CrdtSyncModelFailurePredicate,
   CrdtSyncModelMinimizeOptions,
+  CrdtSyncModelReproAction,
+  CrdtSyncModelReproArtifact,
+  CrdtSyncModelReproArtifactOptions,
+  CrdtSyncModelReproMinimizeOptions,
+  CrdtSyncModelReproOperation,
+  CrdtSyncModelReproPath,
+  CrdtSyncModelReproPeer,
+  CrdtSyncModelReproPredicate,
+  CrdtSyncModelReproReplayResult,
+  CrdtSyncModelReproScenario,
+  CrdtSyncModelReproSummary,
   CrdtSyncModelReplayHooks,
   CrdtSyncModelReplayResult,
   CrdtSyncModelScheduleAction

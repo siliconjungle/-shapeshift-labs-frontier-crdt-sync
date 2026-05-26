@@ -6,6 +6,7 @@ const syncRepo = await import('../dist/repo.js');
 const syncStorage = await import('../dist/storage.js');
 const syncProvider = await import('../dist/provider.js');
 const syncModel = await import('../dist/model.js');
+const syncForensics = await import('../dist/forensics.js');
 const syncTextBinding = await import('../dist/text-binding.js');
 const crdt = await import('@shapeshift-labs/frontier-crdt');
 
@@ -56,8 +57,16 @@ assert.deepStrictEqual(Object.keys(syncProvider).sort(), [
 assert.deepStrictEqual(Object.keys(syncModel).sort(), [
   'checkCrdtSyncConvergence',
   'createCrdtSyncModelChecker',
+  'createCrdtSyncModelReproArtifact',
+  'minimizeCrdtSyncModelReproScenario',
   'minimizeCrdtSyncModelSchedule',
-  'replayCrdtSyncModelSchedule'
+  'replayCrdtSyncModelReproScenario',
+  'replayCrdtSyncModelSchedule',
+  'summarizeCrdtSyncModelReproScenario'
+]);
+assert.deepStrictEqual(Object.keys(syncForensics).sort(), [
+  'createCrdtSyncReplayArtifact',
+  'createCrdtSyncReplayArtifactStore'
 ]);
 assert.deepStrictEqual(Object.keys(syncTextBinding).sort(), [
   'createCrdtTextBinding'
@@ -142,6 +151,23 @@ disconnect.disconnect?.();
 const checker = sync.createCrdtSyncModelChecker();
 assert.deepStrictEqual(checker.getPeerIds(), []);
 assert.strictEqual(sync.checkCrdtSyncConvergence([alice, bob]).valid, true);
+
+const artifactStore = syncForensics.createCrdtSyncReplayArtifactStore({ now: () => 1 });
+const artifact = artifactStore.append([
+  { type: 'connect', peerId: 'alice' },
+  { type: 'connect', peerId: 'bob' },
+  { type: 'drain', maxSteps: 4 }
+], {
+  minimized: true,
+  result: await checker.drain({ maxSteps: 0 }),
+  metadata: { source: 'smoke' }
+});
+assert.strictEqual(artifact.kind, 'crdt-sync-replay');
+assert.strictEqual(artifact.seq, 1);
+assert.strictEqual(artifact.minimized, true);
+assert.deepStrictEqual(artifactStore.read({ sinceSeq: 0 }).map((entry) => entry.id), [artifact.id]);
+artifactStore.checkpoint();
+assert.strictEqual(artifactStore.getStats().log.records, 0);
 
 const adapter = {
   value: '',

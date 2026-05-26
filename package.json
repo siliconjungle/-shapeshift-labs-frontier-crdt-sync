@@ -46,6 +46,11 @@
       "import": "./dist/model.js",
       "default": "./dist/model.js"
     },
+    "./forensics": {
+      "types": "./dist/forensics.d.ts",
+      "import": "./dist/forensics.js",
+      "default": "./dist/forensics.js"
+    },
     "./text-binding": {
       "types": "./dist/text-binding.d.ts",
       "import": "./dist/text-binding.js",
@@ -64,6 +69,7 @@
   },
   "dependencies": {
     "@shapeshift-labs/frontier-crdt": "^0.1.0",
+    "@shapeshift-labs/frontier-event-log": "^0.1.2",
     "@shapeshift-labs/frontier": "^0.1.5"
   },
   "devDependencies": {
