@@ -1,6 +1,13 @@
 export {
   createCrdtSyncProvider,
-  createCrdtLocalSyncNetwork
+  createCrdtLocalSyncNetwork,
+  scheduleCrdtSync
+} from './crdt-sync-provider.js';
+
+export type {
+  CrdtSyncScheduleOptions,
+  CrdtSyncSchedulerLike,
+  CrdtSyncSchedulerTask
 } from './crdt-sync-provider.js';
 
 export type {
@@ -10,6 +17,7 @@ export type {
   CrdtSyncProviderEvent,
   CrdtSyncProviderEventListener,
   CrdtSyncProviderEventType,
+  CrdtSyncProviderLazyBodyOptions,
   CrdtSyncProviderOptions,
   CrdtSyncProviderStatus,
   CrdtSyncTransport,

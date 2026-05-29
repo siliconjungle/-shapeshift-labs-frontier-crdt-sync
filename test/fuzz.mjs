@@ -8,6 +8,7 @@ import {
   createCrdtDocHandle,
   createCrdtMemoryStorageAdapter,
   createCrdtSyncEndpoint,
+  createCrdtSyncGhostState,
   createCrdtDocumentUrl,
   decodeCrdtSyncMessage,
   encodeCrdtSyncMessage,
@@ -76,6 +77,7 @@ async function runCase(caseIndex) {
     console.error('wrote CRDT sync fuzz repro artifact: ' + artifactPath);
   }
   assert.strictEqual(convergence.valid, true, JSON.stringify(convergence.mismatches));
+  fuzzGhostState(caseIndex);
   await fuzzStorage(caseIndex, peers[0].doc.exportUpdate());
   fuzzUrls(caseIndex);
 }
@@ -176,6 +178,39 @@ async function fuzzStorage(caseIndex, update) {
   await handle.compactStorage({ includeView: true });
   assert.ok((await storage.loadUpdates(`stored-${caseIndex}`)).length >= 0);
   assert.ok(events.includes('append-update'));
+}
+
+function fuzzGhostState(caseIndex) {
+  const source = createCrdtDocument({ actorId: `ghost-source-${caseIndex}` });
+  const client = createCrdtDocument({ actorId: `ghost-client-${caseIndex}` });
+  const ghost = createCrdtSyncGhostState();
+  for (let frame = 0; frame < 8; frame++) {
+    const writes = 1 + randInt(4);
+    for (let i = 0; i < writes; i++) {
+      source.set(`/ghost/e${frame}-${i}`, { frame, i, value: randInt(1024) });
+    }
+    const delta = ghost.createDelta(source);
+    if (delta === undefined) continue;
+    if (randInt(3) === 0 && clientCoversBasis(client, delta.basisRanges)) {
+      client.applyUpdate(delta.update);
+      ghost.markAcked(delta.ranges);
+    }
+  }
+  const repair = ghost.createRepairDelta(source);
+  if (repair !== undefined) {
+    client.applyUpdate(repair.update);
+    ghost.markAcked(repair.ranges);
+  }
+  assert.deepStrictEqual(client.toJSON(), source.toJSON());
+}
+
+function clientCoversBasis(client, basisRanges) {
+  const stateVector = client.getStateVector();
+  for (let i = 0; i < basisRanges.length; i++) {
+    const range = basisRanges[i];
+    if ((stateVector[range.actor] || 0) < range.end) return false;
+  }
+  return true;
 }
 
 function fuzzUrls(caseIndex) {

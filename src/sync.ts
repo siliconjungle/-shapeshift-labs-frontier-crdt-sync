@@ -1,6 +1,9 @@
 export {
   createCrdtSyncState,
   createCrdtSyncEndpoint,
+  createCrdtSyncGhostState,
+  diffCrdtSyncActorRanges,
+  unionCrdtSyncActorRanges,
   encodeCrdtSyncMessage,
   decodeCrdtSyncMessage,
   createCrdtDocumentUrl,
@@ -10,9 +13,13 @@ export {
 export type {
   CrdtDocumentUrlOptions,
   CrdtDocumentUrlParts,
+  CrdtSyncLazyBodyReference,
   CrdtSyncActorRange,
   CrdtSyncEndpoint,
   CrdtSyncEndpointOptions,
+  CrdtSyncGhostDelta,
+  CrdtSyncGhostState,
+  CrdtSyncGhostStateOptions,
   CrdtSyncMessage,
   CrdtSyncMessageInput,
   CrdtSyncMessageType,

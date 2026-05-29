@@ -41,6 +41,11 @@
       "import": "./dist/provider.js",
       "default": "./dist/provider.js"
     },
+    "./lazy-body": {
+      "types": "./dist/lazy-body.d.ts",
+      "import": "./dist/lazy-body.js",
+      "default": "./dist/lazy-body.js"
+    },
     "./model": {
       "types": "./dist/model.d.ts",
       "import": "./dist/model.js",
@@ -70,7 +75,7 @@
   "dependencies": {
     "@shapeshift-labs/frontier-crdt": "0.1.4",
     "@shapeshift-labs/frontier-event-log": "0.1.2",
-    "@shapeshift-labs/frontier": "0.1.8"
+    "@shapeshift-labs/frontier": "0.1.9"
   },
   "devDependencies": {
     "typescript": "^6.0.3"

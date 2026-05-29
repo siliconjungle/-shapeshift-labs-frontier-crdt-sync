@@ -7,6 +7,7 @@ import {
 import type {
   CrdtLocalSyncNetwork,
   CrdtStateVector,
+  CrdtSyncLazyBodyStoreLike,
   CrdtSyncEndpoint,
   CrdtSyncMessage,
   CrdtSyncMessageInput,
@@ -15,10 +16,15 @@ import type {
   CrdtSyncProviderEvent,
   CrdtSyncProviderEventListener,
   CrdtSyncProviderOptions,
+  CrdtSyncProviderLazyBodyOptions,
   CrdtSyncProviderStatus,
   CrdtSyncTransport,
   CrdtSyncTransportPayload
 } from './types.js';
+
+type CrdtSyncLazyBodyModule = typeof import('./crdt-sync-lazy-body.js');
+
+let lazyBodyModulePromise: Promise<CrdtSyncLazyBodyModule> | undefined;
 
 export function createCrdtSyncProvider(endpoint: CrdtSyncEndpoint, options?: CrdtSyncProviderOptions): CrdtSyncProvider {
   return new FrontierCrdtSyncProvider(endpoint, options);
@@ -28,11 +34,77 @@ export function createCrdtLocalSyncNetwork(): CrdtLocalSyncNetwork {
   return new FrontierCrdtLocalSyncNetwork();
 }
 
+export interface CrdtSyncSchedulerTask extends Record<string, unknown> {
+  run(context?: unknown): unknown;
+}
+
+export interface CrdtSyncSchedulerLike {
+  schedule(task: CrdtSyncSchedulerTask): unknown;
+  run?(options?: unknown): unknown;
+  requestRun?(options?: unknown): unknown;
+}
+
+export interface CrdtSyncScheduleOptions {
+  scheduler: CrdtSyncSchedulerLike;
+  id?: string;
+  peerId?: string;
+  lane?: string;
+  priority?: unknown;
+  units?: number;
+  key?: string;
+  causeId?: string;
+  parentId?: string;
+  dependsOn?: readonly string[];
+  autoRun?: boolean;
+  runOptions?: unknown;
+  metadata?: Record<string, unknown>;
+  onError?: (error: unknown) => void;
+}
+
+export function scheduleCrdtSync(provider: CrdtSyncProvider, options: CrdtSyncScheduleOptions): unknown {
+  const scheduler = options.scheduler;
+  if (typeof (provider as { sync?: unknown } | null | undefined)?.sync !== 'function' || typeof (scheduler as { schedule?: unknown } | null | undefined)?.schedule !== 'function') {
+    throw new TypeError('invalid crdt sync scheduler');
+  }
+  const peerId = options.peerId;
+  const scheduled = scheduler.schedule({
+    id: options.id,
+    type: 'frontier.crdt-sync.sync',
+    lane: options.lane ?? 'sync',
+    priority: options.priority ?? 'normal',
+    units: options.units ?? 1,
+    key: options.key ?? 'sync:' + (provider.endpoint.documentId ?? 'doc') + ':' + (peerId ?? '*'),
+    causeId: options.causeId,
+    parentId: options.parentId,
+    dependsOn: options.dependsOn,
+    metadata: {
+      documentId: provider.endpoint.documentId,
+      peerId,
+      ...(options.metadata ?? {})
+    },
+    run() {
+      try {
+        const result = provider.sync(peerId);
+        if (options.onError) void Promise.resolve(result).catch(options.onError);
+        return result;
+      } catch (error) {
+        options.onError?.(error);
+        if (!options.onError) throw error;
+      }
+    }
+  });
+  if (options.autoRun === true) {
+    (scheduler.requestRun ?? scheduler.run)?.call(scheduler, options.runOptions);
+  }
+  return scheduled;
+}
+
 class FrontierCrdtSyncProvider implements CrdtSyncProvider {
   private readonly peers = new Set<string>();
   private readonly transport?: CrdtSyncProviderOptions['transport'];
   private readonly encodeMessages: boolean;
   private readonly syncOnConnect: boolean;
+  private readonly lazyBodies?: Required<CrdtSyncProviderLazyBodyOptions>;
   private readonly listeners = new Set<CrdtSyncProviderEventListener>();
   private unsubscribeTransport: (() => void) | undefined;
   private currentStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected';
@@ -41,6 +113,7 @@ class FrontierCrdtSyncProvider implements CrdtSyncProvider {
     this.transport = options?.transport;
     this.encodeMessages = options?.encodeMessages !== false;
     this.syncOnConnect = options?.syncOnConnect === true;
+    this.lazyBodies = normalizeLazyBodies(options?.lazyBodies);
     if (options?.peers) {
       for (let i = 0; i < options.peers.length; i++) this.addPeer(options.peers[i]);
     }
@@ -123,7 +196,14 @@ class FrontierCrdtSyncProvider implements CrdtSyncProvider {
   }
 
   async receive(message: CrdtSyncMessageInput, peerId?: string): Promise<CrdtSyncMessage | undefined> {
-    const decoded = decodeCrdtSyncMessage(message);
+    if (peerId !== undefined && this.listeners.size === 0) {
+      this.addPeer(peerId);
+      const input = this.lazyBodies === undefined ? message : await this.hydrateMessage(decodeCrdtSyncMessage(message));
+      const reply = this.endpoint.receive(peerId, input);
+      if (reply !== undefined) await this.send(peerId, reply);
+      return reply;
+    }
+    const decoded = await this.hydrateMessage(decodeCrdtSyncMessage(message));
     const resolvedPeerId = peerId ?? decoded.senderId;
     if (resolvedPeerId === undefined) throw new TypeError('CRDT sync message is missing senderId');
     this.addPeer(resolvedPeerId);
@@ -135,9 +215,24 @@ class FrontierCrdtSyncProvider implements CrdtSyncProvider {
 
   private async send(peerId: string, message: CrdtSyncMessage): Promise<void> {
     if (this.currentStatus !== 'connected' || this.transport === undefined) return;
-    const payload = this.encodeMessages ? encodeCrdtSyncMessage(message) : cloneCrdtSyncMessage(message);
-    this.emit({ type: 'send', peerId, message });
+    const outbound = await this.createOutboundMessage(message);
+    const payload = this.encodeMessages ? encodeCrdtSyncMessage(outbound) : cloneCrdtSyncMessage(outbound);
+    this.emit({ type: 'send', peerId, message: outbound });
     await this.transport.send(peerId, payload);
+  }
+
+  private async createOutboundMessage(message: CrdtSyncMessage): Promise<CrdtSyncMessage> {
+    if (this.lazyBodies === undefined) return cloneCrdtSyncMessage(message);
+    const lazy = await loadLazyBodyModule();
+    return lazy.createCrdtSyncLazyUpdateMessage(message, this.lazyBodies.store, {
+      thresholdBytes: this.lazyBodies.thresholdBytes
+    });
+  }
+
+  private async hydrateMessage(message: CrdtSyncMessage): Promise<CrdtSyncMessage> {
+    if (this.lazyBodies === undefined) return message;
+    const lazy = await loadLazyBodyModule();
+    return lazy.hydrateCrdtSyncLazyUpdateMessage(message, this.lazyBodies.store);
   }
 
   private async subscribeTransport(): Promise<void> {
@@ -158,6 +253,24 @@ class FrontierCrdtSyncProvider implements CrdtSyncProvider {
     const cloned = cloneCrdtSyncProviderEvent(event);
     this.listeners.forEach((listener) => listener(cloned));
   }
+}
+
+function normalizeLazyBodies(
+  options: CrdtSyncProviderOptions['lazyBodies']
+): Required<CrdtSyncProviderLazyBodyOptions> | undefined {
+  if (options === undefined) return undefined;
+  if ('put' in options && 'get' in options && 'has' in options) {
+    return { store: options as CrdtSyncLazyBodyStoreLike, thresholdBytes: 4096 };
+  }
+  return {
+    store: options.store,
+    thresholdBytes: options.thresholdBytes === undefined ? 4096 : Math.max(0, Math.floor(options.thresholdBytes))
+  };
+}
+
+function loadLazyBodyModule(): Promise<CrdtSyncLazyBodyModule> {
+  lazyBodyModulePromise ??= import('./crdt-sync-lazy-body.js');
+  return lazyBodyModulePromise;
 }
 
 class FrontierCrdtLocalSyncNetwork implements CrdtLocalSyncNetwork {

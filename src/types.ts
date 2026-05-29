@@ -56,12 +56,38 @@ export interface CrdtSyncStateOptions {
   senderId?: string;
 }
 
+export interface CrdtSyncGhostStateOptions {
+  stateVector?: CrdtStateVector | null;
+  ackedRanges?: CrdtSyncActorRange[] | null;
+  ghostRanges?: CrdtSyncActorRange[] | null;
+  pendingRanges?: CrdtSyncActorRange[] | null;
+}
+
 export type CrdtSyncMessageType = 'state-vector' | 'update' | 'ack';
 
 export interface CrdtSyncActorRange {
   actor: CrdtActorId;
   start: number;
   end: number;
+}
+
+export type CrdtSyncReconciliationStrategy = 'merkle-iblt';
+
+export interface CrdtSyncReconciliationCell {
+  actor: CrdtActorId;
+  start: number;
+  end: number;
+  count: number;
+  hash: number;
+}
+
+export interface CrdtSyncReconciliation {
+  version: 1;
+  strategy: CrdtSyncReconciliationStrategy;
+  bucketSize: number;
+  rangeCount: number;
+  opCount: number;
+  cells: CrdtSyncReconciliationCell[];
 }
 
 export interface CrdtSyncMessage {
@@ -75,7 +101,34 @@ export interface CrdtSyncMessage {
   
   actorRanges?: CrdtSyncActorRange[];
   
+  reconciliation?: CrdtSyncReconciliation;
+
   update?: Uint8Array;
+
+  updateBody?: CrdtSyncLazyBodyReference;
+}
+
+export interface CrdtSyncLazyBodyReference {
+  version: 1;
+  kind: 'crdt-update';
+  hash: string;
+  byteLength: number;
+  stateVector: CrdtStateVector;
+  actorRanges: CrdtSyncActorRange[];
+}
+
+export interface CrdtSyncLazyBodyStoreLike {
+  put(update: CrdtUpdateInput): CrdtSyncLazyBodyReference;
+  get(reference: CrdtSyncLazyBodyReference): Uint8Array | undefined;
+  has(reference: CrdtSyncLazyBodyReference): boolean;
+}
+
+export interface CrdtSyncGhostDelta {
+  update: Uint8Array;
+  ranges: CrdtSyncActorRange[];
+  basisRanges: CrdtSyncActorRange[];
+  targetRanges: CrdtSyncActorRange[];
+  stateVector: CrdtStateVector;
 }
 
 export type CrdtSyncMessageInput =
@@ -120,6 +173,18 @@ export interface CrdtSyncState {
 
   
   receiveMessage(doc: CrdtDocument, message: CrdtSyncMessageInput): CrdtSyncMessage | undefined;
+}
+
+export interface CrdtSyncGhostState {
+  getAckedActorRanges(): CrdtSyncActorRange[];
+  getGhostActorRanges(): CrdtSyncActorRange[];
+  getPendingActorRanges(): CrdtSyncActorRange[];
+  reset(options?: CrdtSyncGhostStateOptions | null): void;
+  markAcked(ranges?: readonly CrdtSyncActorRange[] | CrdtStateVector | null): CrdtSyncActorRange[];
+  markUpdateAcked(update: CrdtUpdateInput): CrdtSyncActorRange[];
+  markDocumentAcked(doc: CrdtDocument): CrdtSyncActorRange[];
+  createDelta(doc: CrdtDocument): CrdtSyncGhostDelta | undefined;
+  createRepairDelta(doc: CrdtDocument): CrdtSyncGhostDelta | undefined;
 }
 
 export type CrdtSyncPeerStates = Record<string, CrdtStateVector>;
@@ -338,6 +403,12 @@ export interface CrdtSyncProviderOptions {
   peers?: string[];
   encodeMessages?: boolean;
   syncOnConnect?: boolean;
+  lazyBodies?: CrdtSyncLazyBodyStoreLike | CrdtSyncProviderLazyBodyOptions;
+}
+
+export interface CrdtSyncProviderLazyBodyOptions {
+  store: CrdtSyncLazyBodyStoreLike;
+  thresholdBytes?: number;
 }
 
 export interface CrdtSyncPeerInfo {

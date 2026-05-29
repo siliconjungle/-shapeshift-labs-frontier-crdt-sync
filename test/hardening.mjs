@@ -1,9 +1,11 @@
 import assert from 'node:assert';
 import { createCrdtDocument } from '@shapeshift-labs/frontier-crdt';
 import { decodeCrdtUpdate } from '@shapeshift-labs/frontier-crdt/update';
+import { createCrdtUndoManager } from '@shapeshift-labs/frontier-crdt/undo';
 import {
   checkCrdtSyncConvergence,
   createCrdtDocHandle,
+  createCrdtLocalSyncNetwork,
   createCrdtMemoryStorageAdapter,
   createCrdtRepo,
   createCrdtSyncEndpoint,
@@ -29,6 +31,9 @@ await testProtocolValidation();
 await testModelFaults();
 await testReplayAndMinimize();
 await testStorageContracts();
+await testStorageCompactionSchedules();
+await testProviderRepoScenarios();
+await testRollbackConvergenceFixtures();
 await testDeterministicSoak(soakCases, soakSteps);
 
 console.log(`frontier crdt-sync hardening passed soakCases=${soakCases} soakSteps=${soakSteps} seed=${readSeed(args.seed, 0x71f0c0de)}`);
@@ -66,6 +71,77 @@ async function testProtocolValidation() {
     stateVector: {},
     update: '!!!!'
   }))), /base64/);
+  assert.throws(() => decodeCrdtSyncMessage(encoder.encode(JSON.stringify({
+    magic: 'frontier-crdt-sync',
+    version: 1,
+    type: 'ack',
+    stateVector: {},
+    reconciliation: {
+      version: 1,
+      strategy: 'merkle-iblt',
+      bucketSize: 0,
+      rangeCount: 1,
+      opCount: 1,
+      cells: []
+    }
+  }))), /reconciliation/);
+  assert.throws(() => decodeCrdtSyncMessage(encoder.encode(JSON.stringify({
+    magic: 'frontier-crdt-sync',
+    version: 1,
+    type: 'ack',
+    stateVector: {},
+    reconciliation: {
+      version: 1,
+      strategy: 'merkle-iblt',
+      bucketSize: 4,
+      rangeCount: 1,
+      opCount: 1,
+      cells: [{ actor: 'a', start: 1, end: 4, count: 5, hash: 1 }]
+    }
+  }))), /reconciliation cell/);
+  assert.throws(() => decodeCrdtSyncMessage(encoder.encode(JSON.stringify({
+    magic: 'frontier-crdt-sync',
+    version: 1,
+    type: 'ack',
+    stateVector: {},
+    actorRanges: [{ actor: 'a', start: 1, end: 1 }],
+    reconciliation: {
+      version: 1,
+      strategy: 'merkle-iblt',
+      bucketSize: 4,
+      rangeCount: 1,
+      opCount: 1,
+      cells: [{ actor: 'a', start: 1, end: 4, count: 1, hash: 1 }]
+    }
+  }))), /invalid CRDT sync message/);
+  assert.throws(() => decodeCrdtSyncMessage(encoder.encode(JSON.stringify({
+    magic: 'frontier-crdt-sync',
+    version: 1,
+    type: 'update',
+    stateVector: {},
+    updateBody: {
+      version: 1,
+      kind: 'crdt-update',
+      hash: 'sha256:not-supported-here',
+      byteLength: 12,
+      stateVector: {},
+      actorRanges: []
+    }
+  }))), /lazy body reference/);
+  assert.throws(() => decodeCrdtSyncMessage(encoder.encode(JSON.stringify({
+    magic: 'frontier-crdt-sync',
+    version: 1,
+    type: 'update',
+    stateVector: {},
+    updateBody: {
+      version: 1,
+      kind: 'crdt-update',
+      hash: 'fnv1a64:0000000000000000',
+      byteLength: -1,
+      stateVector: {},
+      actorRanges: []
+    }
+  }))), /lazy body reference/);
 
   const alice = createCrdtDocument({ actorId: 'protocol-alice' });
   const bob = createCrdtDocument({ actorId: 'protocol-bob' });
@@ -341,6 +417,192 @@ async function testStorageContracts() {
   assert.strictEqual(repo.get('repo-doc'), undefined);
 }
 
+async function testStorageCompactionSchedules() {
+  const documentId = 'compaction-schedule-doc';
+  const storage = createCrdtMemoryStorageAdapter({ validateUpdates: true });
+  const events = [];
+  const unsubscribe = storage.subscribe((event) => {
+    events.push({ type: event.type, documentId: event.documentId, updateCount: event.updateCount });
+  });
+
+  const handle = createCrdtDocHandle({
+    documentId,
+    peerId: 'compaction-peer-a',
+    actorId: 'compaction-actor-a',
+    storage
+  });
+  await handle.set('/items/a', { value: 1 });
+  await handle.set('/items/b', { value: 2 });
+  await handle.saveSnapshot({ includeView: true });
+  assert.ok((await storage.loadUpdates(documentId)).length >= 2);
+
+  const queuedC = createCrdtDocument({ actorId: 'compaction-queued-c' }).set('/queued/c', 3).update;
+  const queuedD = createCrdtDocument({ actorId: 'compaction-queued-d' }).set('/queued/d', 4).update;
+  const snapshot = handle.doc.snapshot({ includeView: true });
+  await Promise.all([
+    storage.appendUpdate(documentId, queuedC),
+    storage.compact(documentId, snapshot, [queuedD]),
+    storage.appendUpdate(documentId, queuedC)
+  ]);
+
+  const replay = createCrdtDocHandle({
+    documentId,
+    peerId: 'compaction-peer-b',
+    actorId: 'compaction-actor-b',
+    storage
+  });
+  await replay.load();
+  assert.deepStrictEqual(replay.toJSON(), {
+    items: {
+      a: { value: 1 },
+      b: { value: 2 }
+    },
+    queued: {
+      c: 3,
+      d: 4
+    }
+  });
+
+  const compactedWithSnapshotUpdate = await replay.compactStorage({ includeView: true, keepSnapshotUpdate: true });
+  assert.strictEqual(compactedWithSnapshotUpdate.afterUpdateCount, 1);
+  const restoredFromSnapshotUpdate = createCrdtDocHandle({
+    documentId,
+    peerId: 'compaction-peer-c',
+    actorId: 'compaction-actor-c',
+    storage
+  });
+  await restoredFromSnapshotUpdate.load();
+  assert.deepStrictEqual(restoredFromSnapshotUpdate.toJSON(), replay.toJSON());
+
+  const compactedSnapshotOnly = await restoredFromSnapshotUpdate.compactStorage({ includeView: true });
+  assert.strictEqual(compactedSnapshotOnly.afterUpdateCount, 0);
+  const restoredSnapshotOnly = createCrdtDocHandle({
+    documentId,
+    peerId: 'compaction-peer-d',
+    actorId: 'compaction-actor-d',
+    storage
+  });
+  await restoredSnapshotOnly.load();
+  assert.deepStrictEqual(restoredSnapshotOnly.toJSON(), replay.toJSON());
+  assert.deepStrictEqual(await storage.listDocuments(), [documentId]);
+  assert.ok(events.some((event) => event.type === 'append-update'));
+  assert.ok(events.some((event) => event.type === 'snapshot'));
+  assert.ok(events.some((event) => event.type === 'compact' && event.updateCount === 1));
+  assert.ok(events.some((event) => event.type === 'compact' && event.updateCount === 0));
+  unsubscribe();
+}
+
+async function testProviderRepoScenarios() {
+  const documentId = 'provider-repo-doc';
+  const peerIds = ['repo-net-a', 'repo-net-b', 'repo-net-c'];
+  const network = createCrdtLocalSyncNetwork();
+  const storages = peerIds.map(() => createCrdtMemoryStorageAdapter({ validateUpdates: true }));
+  const events = [];
+  const repos = peerIds.map((peerId, index) => createRepoProcess(peerId, index));
+  const handles = [];
+
+  for (let index = 0; index < repos.length; index++) {
+    handles[index] = await repos[index].open(documentId, { actorId: `${peerIds[index]}-actor` });
+    handles[index].provider.subscribe((event) => {
+      events.push(`${peerIds[index]}:${event.type}`);
+    });
+  }
+  await Promise.all(repos.map((repo) => repo.connectAll()));
+
+  await handles[0].set('/title', 'draft');
+  await handles[1].set('/participants/b', true);
+  await syncRepos(repos);
+  assertConvergedHandles(handles);
+
+  const savedSyncState = repos[2].getSyncState();
+  await repos[2].disconnectAll();
+  await handles[0].set('/offline/a', 1);
+  await handles[1].set('/offline/b', 2);
+  await syncRepos([repos[0], repos[1]]);
+  assert.notDeepStrictEqual(handles[2].toJSON(), handles[0].toJSON());
+
+  await handles[2].saveSnapshot({ includeView: true });
+  repos[2].close(documentId);
+  repos[2] = createRepoProcess(peerIds[2], 2, savedSyncState);
+  handles[2] = await repos[2].open(documentId, { actorId: `${peerIds[2]}-actor-restarted` });
+  handles[2].provider.subscribe((event) => {
+    events.push(`${peerIds[2]}-restarted:${event.type}`);
+  });
+  await repos[2].connectAll();
+  await syncRepos(repos);
+  assertConvergedHandles(handles);
+  assert.deepStrictEqual(await repos[2].listStoredDocuments(), [documentId]);
+  assert.ok(events.some((event) => event.endsWith(':send')));
+  assert.ok(events.some((event) => event.endsWith(':receive')));
+
+  await Promise.all(repos.map((repo) => repo.disconnectAll()));
+
+  function createRepoProcess(peerId, index, syncState) {
+    return createCrdtRepo({
+      peerId,
+      storage: storages[index],
+      syncState,
+      sync: {
+        transport: network.connect(peerId),
+        peers: peerIds.filter((candidate) => candidate !== peerId),
+        encodeMessages: index !== 1,
+        syncOnConnect: false
+      }
+    });
+  }
+}
+
+async function testRollbackConvergenceFixtures() {
+  const local = createCrdtDocument({ actorId: 'rollback-local' });
+  const remote = createCrdtDocument({ actorId: 'rollback-remote' });
+  const observer = createCrdtDocument({ actorId: 'rollback-observer' });
+  const undo = createCrdtUndoManager(local, { trackedOrigins: ['typing', 'title'] });
+
+  undo.capture(() => {
+    local.text('/body').insert(0, 'abc');
+  }, { origin: 'typing' });
+  undo.capture(() => {
+    local.set('/title', 'draft');
+  }, { origin: 'title' });
+  remote.applyUpdate(local.exportUpdate());
+  observer.applyUpdate(local.exportUpdate());
+  remote.set('/meta/remote', true);
+  observer.set('/meta/observer', true);
+  local.applyUpdate(remote.exportUpdate(local.getStateVector()));
+  local.applyUpdate(observer.exportUpdate(local.getStateVector()));
+  undo.undo({ origin: 'typing' });
+
+  const convergedView = await convergeDocsThroughModel('rollback-converge-doc', [
+    { id: 'rollback-local', doc: local },
+    { id: 'rollback-remote', doc: remote },
+    { id: 'rollback-observer', doc: observer }
+  ]);
+  assert.deepStrictEqual(convergedView, {
+    title: 'draft',
+    meta: {
+      observer: true,
+      remote: true
+    }
+  });
+
+  const unsafeLocal = createCrdtDocument({ actorId: 'rollback-unsafe-local' });
+  const unsafeRemote = createCrdtDocument({ actorId: 'rollback-unsafe-remote' });
+  const unsafeUndo = createCrdtUndoManager(unsafeLocal);
+  unsafeUndo.capture(() => {
+    unsafeLocal.text('/body').insert(0, 'abc');
+  });
+  unsafeRemote.applyUpdate(unsafeLocal.exportUpdate());
+  unsafeRemote.text('/body').insert(0, 'X');
+  unsafeLocal.applyUpdate(unsafeRemote.exportUpdate(unsafeLocal.getStateVector()));
+  assert.throws(() => unsafeUndo.undo(), /overlapping path/);
+
+  const unsafeConvergedView = await convergeDocsThroughModel('rollback-refusal-doc', [
+    { id: 'rollback-refusal-local', doc: unsafeLocal },
+    { id: 'rollback-refusal-remote', doc: unsafeRemote }
+  ]);
+  assert.deepStrictEqual(unsafeConvergedView, { body: 'Xabc' });
+}
+
 async function testDeterministicSoak(cases, steps) {
   for (let caseIndex = 0; caseIndex < cases; caseIndex++) {
     const model = createModelNetwork(3 + randInt(2), `soak-doc-${caseIndex}`, `soak-${caseIndex}`);
@@ -435,6 +697,58 @@ function createModelNetwork(peerCount, documentId, prefix) {
     model.attach(peer);
   }
   return model;
+}
+
+async function syncRepos(repos, rounds = 4) {
+  for (let round = 0; round < rounds; round++) {
+    for (let index = 0; index < repos.length; index++) await repos[index].syncAll();
+  }
+}
+
+function assertConvergedHandles(handles) {
+  const convergence = checkCrdtSyncConvergence(handles.map((handle, index) => ({
+    peerId: handle.peerId ?? `handle-${index}`,
+    view: handle.toJSON(),
+    stateVector: handle.doc.getStateVector()
+  })));
+  assert.strictEqual(convergence.valid, true, JSON.stringify(convergence.mismatches));
+}
+
+async function convergeDocsThroughModel(documentId, docs) {
+  const checker = createCrdtSyncModelChecker();
+  let wireCounter = 0;
+  const peers = docs.map(({ id, doc }) => ({
+    id,
+    doc,
+    endpoint: createCrdtSyncEndpoint(doc, {
+      documentId,
+      senderId: id,
+      actorRangeSync: true
+    }),
+    transport: undefined
+  }));
+  const maybeWire = (message) => {
+    wireCounter++;
+    return wireCounter % 2 === 0 ? encodeCrdtSyncMessage(message) : message;
+  };
+  for (const peer of peers) {
+    peer.transport = checker.connect(peer.id, async (message, fromPeerId) => {
+      const reply = peer.endpoint.receive(fromPeerId, message);
+      if (reply !== undefined) peer.transport.send(fromPeerId, maybeWire(reply));
+    });
+  }
+  for (let round = 0; round < peers.length + 3; round++) {
+    for (let left = 0; left < peers.length; left++) {
+      for (let right = 0; right < peers.length; right++) {
+        if (left !== right) peers[left].transport.send(peers[right].id, maybeWire(peers[left].endpoint.open(peers[right].id)));
+      }
+    }
+    const result = await checker.drain({ maxSteps: 2000 });
+    assert.strictEqual(result.valid, true, JSON.stringify(result.errors));
+  }
+  const convergence = checkCrdtSyncConvergence(peers.map((peer) => ({ peerId: peer.id, doc: peer.doc })));
+  assert.strictEqual(convergence.valid, true, JSON.stringify(convergence.mismatches));
+  return peers[0].doc.toJSON();
 }
 
 function mutate(doc, caseIndex, step) {

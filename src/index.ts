@@ -10,11 +10,21 @@ export {
 } from './crdt-sync-wire.js';
 export {
   createCrdtLocalSyncNetwork,
-  createCrdtSyncProvider
+  createCrdtSyncProvider,
+  scheduleCrdtSync
+} from './crdt-sync-provider.js';
+
+export type {
+  CrdtSyncScheduleOptions,
+  CrdtSyncSchedulerLike,
+  CrdtSyncSchedulerTask
 } from './crdt-sync-provider.js';
 export {
   createCrdtSyncEndpoint,
-  createCrdtSyncState
+  createCrdtSyncGhostState,
+  createCrdtSyncState,
+  diffCrdtSyncActorRanges,
+  unionCrdtSyncActorRanges
 } from './crdt-sync-state.js';
 export {
   compactCrdtStorage,

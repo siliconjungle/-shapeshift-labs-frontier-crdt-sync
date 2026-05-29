@@ -2,6 +2,9 @@ import type {
   CrdtDocumentUrlOptions,
   CrdtDocumentUrlParts,
   CrdtSyncActorRange,
+  CrdtSyncLazyBodyReference,
+  CrdtSyncReconciliation,
+  CrdtSyncReconciliationCell,
   CrdtStateVector,
   CrdtSyncMessage,
   CrdtSyncMessageInput,
@@ -73,7 +76,9 @@ export function encodeCrdtSyncMessage(message: CrdtSyncMessage): Uint8Array {
   if (normalized.documentId !== undefined) payload.documentId = normalized.documentId;
   if (normalized.senderId !== undefined) payload.senderId = normalized.senderId;
   if (normalized.actorRanges !== undefined) payload.actorRanges = normalized.actorRanges;
+  if (normalized.reconciliation !== undefined) payload.reconciliation = normalized.reconciliation;
   if (normalized.update !== undefined) payload.update = bytesToBase64(normalized.update);
+  if (normalized.updateBody !== undefined) payload.updateBody = normalized.updateBody;
   return textEncoder.encode(JSON.stringify(payload));
 }
 
@@ -133,8 +138,22 @@ export function cloneCrdtSyncMessage(message: CrdtSyncMessage): CrdtSyncMessage 
   if (message.documentId !== undefined) cloned.documentId = message.documentId;
   if (message.senderId !== undefined) cloned.senderId = message.senderId;
   if (message.actorRanges !== undefined) cloned.actorRanges = cloneActorRanges(message.actorRanges);
+  if (message.reconciliation !== undefined) cloned.reconciliation = cloneReconciliation(message.reconciliation);
   if (message.update !== undefined) cloned.update = message.update.slice();
+  if (message.updateBody !== undefined) cloned.updateBody = cloneLazyBodyReference(message.updateBody);
   return cloned;
+}
+
+export function cloneReconciliation(reconciliation: CrdtSyncReconciliation): CrdtSyncReconciliation {
+  validateReconciliation(reconciliation);
+  return {
+    version: 1,
+    strategy: reconciliation.strategy,
+    bucketSize: reconciliation.bucketSize,
+    rangeCount: reconciliation.rangeCount,
+    opCount: reconciliation.opCount,
+    cells: cloneReconciliationCells(reconciliation.cells)
+  };
 }
 
 export function cloneActorRanges(ranges: readonly CrdtSyncActorRange[]): CrdtSyncActorRange[] {
@@ -175,7 +194,9 @@ function decodeCrdtSyncMessageText(text: string): CrdtSyncMessage {
     senderId?: unknown;
     stateVector?: unknown;
     actorRanges?: unknown;
+    reconciliation?: unknown;
     update?: unknown;
+    updateBody?: unknown;
   };
   if (envelope.magic !== CRDT_SYNC_MESSAGE_MAGIC || envelope.version !== CRDT_SYNC_MESSAGE_VERSION) {
     throw new TypeError('invalid CRDT sync message envelope');
@@ -201,10 +222,12 @@ function decodeCrdtSyncMessageText(text: string): CrdtSyncMessage {
     message.senderId = envelope.senderId;
   }
   if (envelope.actorRanges !== undefined) message.actorRanges = cloneActorRanges(envelope.actorRanges as CrdtSyncActorRange[]);
+  if (envelope.reconciliation !== undefined) message.reconciliation = cloneReconciliation(envelope.reconciliation as CrdtSyncReconciliation);
   if (envelope.update !== undefined) {
     if (typeof envelope.update !== 'string') throw new TypeError('invalid CRDT sync update payload');
     message.update = base64ToBytes(envelope.update);
   }
+  if (envelope.updateBody !== undefined) message.updateBody = cloneLazyBodyReference(envelope.updateBody as CrdtSyncLazyBodyReference);
   return cloneCrdtSyncMessage(message);
 }
 
@@ -214,14 +237,48 @@ function isCrdtSyncMessage(value: unknown): value is CrdtSyncMessage {
   if (message.type !== 'state-vector' && message.type !== 'update' && message.type !== 'ack') return false;
   if (message.documentId !== undefined && typeof message.documentId !== 'string') return false;
   if (message.senderId !== undefined && typeof message.senderId !== 'string') return false;
+  if (message.actorRanges !== undefined && message.reconciliation !== undefined) return false;
   try {
     validateStateVector(message.stateVector);
     if (message.actorRanges !== undefined) validateActorRanges(message.actorRanges);
+    if (message.reconciliation !== undefined) validateReconciliation(message.reconciliation);
+    if (message.updateBody !== undefined) validateLazyBodyReference(message.updateBody);
   } catch {
     return false;
   }
   if (message.update !== undefined && !(message.update instanceof Uint8Array)) return false;
   return true;
+}
+
+function cloneLazyBodyReference(reference: CrdtSyncLazyBodyReference): CrdtSyncLazyBodyReference {
+  validateLazyBodyReference(reference);
+  return {
+    version: 1,
+    kind: 'crdt-update',
+    hash: reference.hash,
+    byteLength: reference.byteLength,
+    stateVector: cloneStateVector(reference.stateVector),
+    actorRanges: cloneActorRanges(reference.actorRanges)
+  };
+}
+
+function validateLazyBodyReference(value: unknown): asserts value is CrdtSyncLazyBodyReference {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('invalid CRDT sync lazy body reference');
+  }
+  const reference = value as CrdtSyncLazyBodyReference;
+  if (
+    reference.version !== 1 ||
+    reference.kind !== 'crdt-update' ||
+    typeof reference.hash !== 'string' ||
+    !/^fnv1a64:[0-9a-f]{16}$/.test(reference.hash) ||
+    !Number.isSafeInteger(reference.byteLength) ||
+    reference.byteLength < 0
+  ) {
+    throw new TypeError('invalid CRDT sync lazy body reference');
+  }
+  validateStateVector(reference.stateVector);
+  validateActorRanges(reference.actorRanges);
 }
 
 function validateStateVector(value: unknown): asserts value is CrdtStateVector {
@@ -262,6 +319,69 @@ function validateActorRanges(value: unknown): asserts value is readonly CrdtSync
   }
 }
 
+function validateReconciliation(value: unknown): asserts value is CrdtSyncReconciliation {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('invalid CRDT sync reconciliation');
+  }
+  const reconciliation = value as CrdtSyncReconciliation;
+  if (
+    reconciliation.version !== 1 ||
+    reconciliation.strategy !== 'merkle-iblt' ||
+    !Number.isSafeInteger(reconciliation.bucketSize) ||
+    reconciliation.bucketSize < 1 ||
+    !Number.isSafeInteger(reconciliation.rangeCount) ||
+    reconciliation.rangeCount < 0 ||
+    !Number.isSafeInteger(reconciliation.opCount) ||
+    reconciliation.opCount < 0 ||
+    !Array.isArray(reconciliation.cells) ||
+    reconciliation.cells.length > 4096
+  ) {
+    throw new TypeError('invalid CRDT sync reconciliation');
+  }
+  validateReconciliationCells(reconciliation.cells);
+}
+
+function validateReconciliationCells(cells: unknown): asserts cells is CrdtSyncReconciliationCell[] {
+  if (!Array.isArray(cells)) throw new TypeError('invalid CRDT sync reconciliation cells');
+  for (let i = 0; i < cells.length; i++) {
+    const cell = cells[i] as CrdtSyncReconciliationCell;
+    if (cell === null || typeof cell !== 'object' || Array.isArray(cell)) {
+      throw new TypeError('invalid CRDT sync reconciliation cell');
+    }
+    if (
+      typeof cell.actor !== 'string' ||
+      cell.actor.length === 0 ||
+      cell.actor.includes(':') ||
+      cell.actor.includes('/') ||
+      !Number.isSafeInteger(cell.start) ||
+      !Number.isSafeInteger(cell.end) ||
+      !Number.isSafeInteger(cell.count) ||
+      !Number.isSafeInteger(cell.hash) ||
+      cell.start < 1 ||
+      cell.end < cell.start ||
+      cell.count < 0 ||
+      cell.count > cell.end - cell.start + 1 ||
+      cell.hash < 0 ||
+      cell.hash > 0xffffffff
+    ) {
+      throw new TypeError('invalid CRDT sync reconciliation cell');
+    }
+  }
+}
+
+function cloneReconciliationCells(cells: readonly CrdtSyncReconciliationCell[]): CrdtSyncReconciliationCell[] {
+  validateReconciliationCells(cells);
+  const cloned = cells.map((cell) => ({
+    actor: cell.actor,
+    start: cell.start,
+    end: cell.end,
+    count: cell.count,
+    hash: cell.hash
+  }));
+  cloned.sort(compareReconciliationCells);
+  return cloned;
+}
+
 function normalizeActorRanges(ranges: readonly CrdtSyncActorRange[]): CrdtSyncActorRange[] {
   const sorted = ranges.map((range) => ({
     actor: range.actor,
@@ -283,6 +403,12 @@ function normalizeActorRanges(ranges: readonly CrdtSyncActorRange[]): CrdtSyncAc
 }
 
 function compareActorRanges(left: CrdtSyncActorRange, right: CrdtSyncActorRange): number {
+  if (left.actor !== right.actor) return left.actor < right.actor ? -1 : 1;
+  if (left.start !== right.start) return left.start - right.start;
+  return left.end - right.end;
+}
+
+function compareReconciliationCells(left: CrdtSyncReconciliationCell, right: CrdtSyncReconciliationCell): number {
   if (left.actor !== right.actor) return left.actor < right.actor ? -1 : 1;
   if (left.start !== right.start) return left.start - right.start;
   return left.end - right.end;
